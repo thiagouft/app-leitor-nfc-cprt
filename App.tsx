@@ -1,3 +1,4 @@
+import { Audio as ExpoAudio } from "expo-av";
 import * as Device from "expo-device";
 import * as SecureStore from "expo-secure-store";
 import React, { useEffect, useRef, useState } from "react";
@@ -81,6 +82,11 @@ export default function App() {
   // Leitura status
   const [lastRead, setLastRead] = useState<any>(null);
   const lastReadTimeRef = useRef<number>(0);
+  const lastTagIdRef = useRef<string | null>(null);
+  const soundRefs = useRef<{
+    success?: ExpoAudio.Sound;
+    error?: ExpoAudio.Sound;
+  }>({});
 
   useEffect(() => {
     async function setup() {
@@ -125,10 +131,40 @@ export default function App() {
         setHasNfc(false);
       }
     }
+
+    async function initAudio() {
+      try {
+        await ExpoAudio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+        });
+
+        const { sound: successSound } = await ExpoAudio.Sound.createAsync(
+          require("./assets/sounds/allowed.wav"),
+        );
+        const { sound: errorSound } = await ExpoAudio.Sound.createAsync(
+          require("./assets/sounds/blocked.wav"),
+        );
+
+        await successSound.setVolumeAsync(1.0);
+        await errorSound.setVolumeAsync(1.0);
+
+        soundRefs.current.success = successSound;
+        soundRefs.current.error = errorSound;
+      } catch (e) {
+        console.warn("Audio load erro:", e);
+      }
+    }
+
     initNfc();
+    initAudio();
 
     return () => {
       NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
+      soundRefs.current.success?.unloadAsync();
+      soundRefs.current.error?.unloadAsync();
     };
   }, []);
 
@@ -252,6 +288,25 @@ export default function App() {
     ]);
   };
 
+  const playFeedbackSound = async (allowed: boolean) => {
+    const sound = allowed ? soundRefs.current.success : soundRefs.current.error;
+    if (!sound) return;
+    try {
+      const status = await sound.getStatusAsync();
+      if (
+        typeof status === "object" &&
+        "isPlaying" in status &&
+        status.isPlaying
+      ) {
+        await sound.stopAsync();
+      }
+      await sound.setPositionAsync(0);
+      await sound.playAsync();
+    } catch (e) {
+      console.warn("Sound play error:", e);
+    }
+  };
+
   const startReadingMode = async () => {
     if (!hasNfc) {
       Alert.alert("Erro", "NFC não suportado ou desativado neste dispositivo.");
@@ -262,18 +317,28 @@ export default function App() {
     setCurrentScreen("READING");
 
     NfcManager.setEventListener(NfcEvents.DiscoverTag, async (tag: any) => {
-      // Evitar leituras múltiplas da mesma tag em menos de 2 segundos
       const now = Date.now();
-      if (now - lastReadTimeRef.current < 2000) return;
-      lastReadTimeRef.current = now;
-
-      let hex = "";
+      let tagSignature = "";
       if (tag.id) {
         if (Array.isArray(tag.id) || tag.id instanceof Uint8Array) {
-          hex = bytesToHex(tag.id as any);
+          tagSignature = bytesToHex(tag.id as any);
         } else if (typeof tag.id === "string") {
-          hex = tag.id.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+          tagSignature = tag.id.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
         }
+      }
+
+      if (tagSignature && tagSignature === lastTagIdRef.current) {
+        if (now - lastReadTimeRef.current < 800) return;
+      } else if (now - lastReadTimeRef.current < 400) {
+        return;
+      }
+
+      lastReadTimeRef.current = now;
+      lastTagIdRef.current = tagSignature;
+
+      let hex = "";
+      if (tagSignature) {
+        hex = tagSignature;
       }
 
       const reversedHex = reverseHex(hex);
@@ -310,6 +375,7 @@ export default function App() {
         idCelular,
         situacaoCode,
       );
+      playFeedbackSound(situacaoCode === 1);
     });
 
     try {
