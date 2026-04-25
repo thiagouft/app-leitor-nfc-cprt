@@ -3,25 +3,25 @@ import * as Device from "expo-device";
 import * as SecureStore from "expo-secure-store";
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import NfcManager, { NfcEvents } from "react-native-nfc-manager";
 import { apiFetch, getApiUrl, setApiUrl, setToken } from "./src/api";
 import {
-  clearPessoas,
-  findPessoaByCredencial,
-  getUnsyncedLeituras,
-  initDB,
-  insertPessoas,
-  markLeiturasAsSynced,
-  saveLeitura,
+    clearPessoas,
+    findPessoaByCredencial,
+    getUnsyncedLeituras,
+    initDB,
+    insertPessoas,
+    markLeiturasAsSynced,
+    saveLeitura,
 } from "./src/database";
 
 // Paleta fornecida:
@@ -79,6 +79,15 @@ export default function App() {
   const [lastSyncLeituras, setLastSyncLeituras] = useState<string | null>(null);
   const [leiturasPendentes, setLeiturasPendentes] = useState<number>(0);
 
+  const refreshPendingLeituras = async () => {
+    try {
+      const unsynced = await getUnsyncedLeituras();
+      setLeiturasPendentes(unsynced.length);
+    } catch (e) {
+      console.warn("Erro ao carregar leituras pendentes:", e);
+    }
+  };
+
   // Leitura status
   const [lastRead, setLastRead] = useState<any>(null);
   const lastReadTimeRef = useRef<number>(0);
@@ -105,6 +114,7 @@ export default function App() {
         const lastLeituras =
           await SecureStore.getItemAsync("last_sync_leituras");
         if (lastLeituras) setLastSyncLeituras(lastLeituras);
+        await refreshPendingLeituras();
       } catch (err) {
         console.error("DB Init error", err);
         Alert.alert(
@@ -375,6 +385,7 @@ export default function App() {
         idCelular,
         situacaoCode,
       );
+      await refreshPendingLeituras();
       playFeedbackSound(situacaoCode === 1);
     });
 
