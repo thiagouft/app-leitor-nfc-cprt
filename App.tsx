@@ -69,6 +69,7 @@ export default function App() {
   const [url, setUrl] = useState("");
   const [login, setLogin] = useState("");
   const [senha, setSenha] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const [portarias, setPortarias] = useState<any[]>([]);
@@ -318,6 +319,14 @@ export default function App() {
   };
 
   const startReadingMode = async () => {
+    if (hasNfc === null) {
+      Alert.alert(
+        "Aguarde",
+        "Verificando o NFC. Por favor, tente novamente em alguns segundos.",
+      );
+      return;
+    }
+
     if (!hasNfc) {
       Alert.alert("Erro", "NFC não suportado ou desativado neste dispositivo.");
       return;
@@ -446,16 +455,28 @@ export default function App() {
             />
 
             <Text style={styles.label}>Senha</Text>
-            <TextInput
-              style={styles.input}
-              value={senha}
-              onChangeText={setSenha}
-              secureTextEntry
-              textContentType="password"
-              autoComplete="password"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
+            <View style={styles.passwordRow}>
+              <TextInput
+                style={[styles.input, styles.passwordInput]}
+                value={senha}
+                onChangeText={setSenha}
+                secureTextEntry={!passwordVisible}
+                textContentType="password"
+                autoComplete="password"
+                keyboardType="default"
+                placeholder="Digite sua senha"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={styles.toggleButton}
+                onPress={() => setPasswordVisible((prev) => !prev)}
+              >
+                <Text style={styles.toggleButtonText}>
+                  {passwordVisible ? "Ocultar" : "Mostrar"}
+                </Text>
+              </TouchableOpacity>
+            </View>
 
             <TouchableOpacity
               style={styles.button}
@@ -523,7 +544,7 @@ export default function App() {
               { backgroundColor: "#3269D9", marginTop: 20 },
             ]}
             onPress={startReadingMode}
-            disabled={loading}
+            disabled={loading || hasNfc === null}
           >
             <Text style={styles.dashboardBtnText}>
               2. Modo Leitura de Cartão
@@ -670,6 +691,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   buttonText: { color: "#FFF", fontWeight: "bold", fontSize: 16 },
+  passwordRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 15,
+  },
+  passwordInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  toggleButton: {
+    marginLeft: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 6,
+    backgroundColor: "#E0E0E0",
+  },
+  toggleButtonText: {
+    color: "#141926",
+    fontWeight: "700",
+  },
 
   portariaCard: {
     backgroundColor: "#F2F2F2",
