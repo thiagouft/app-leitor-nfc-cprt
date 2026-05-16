@@ -33,7 +33,40 @@ export async function initDB() {
       situacao INTEGER,
       sincronizado INTEGER DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS Veiculos (
+      placa TEXT PRIMARY KEY,
+      descricao TEXT
+    );
+    CREATE TABLE IF NOT EXISTS LeiturasVeiculos (
+      id TEXT PRIMARY KEY,
+      placa TEXT,
+      matricula_condutor TEXT,
+      nome_condutor TEXT,
+      credencial_condutor TEXT,
+      data_hora_leitura TEXT,
+      id_celular TEXT,
+      situacao INTEGER,
+      sincronizado INTEGER DEFAULT 0
+    );
   `);
+
+  try {
+    await db.execAsync(`ALTER TABLE LeiturasVeiculos ADD COLUMN credencial_condutor TEXT;`);
+  } catch (e) {
+    // Ignora se a coluna já existir
+  }
+  
+  try {
+    await db.execAsync(`ALTER TABLE LeiturasVeiculos ADD COLUMN id_portaria INTEGER;`);
+  } catch (e) {
+    // Ignora
+  }
+
+  try {
+    await db.execAsync(`ALTER TABLE LeiturasVeiculos ADD COLUMN sentido TEXT;`);
+  } catch (e) {
+    // Ignora
+  }
 }
 
 export async function clearPessoas() {
@@ -91,6 +124,73 @@ export async function markLeiturasAsSynced(ids: string[]) {
   await db.withTransactionAsync(async () => {
     for (const id of ids) {
       await db.runAsync("UPDATE Leituras SET sincronizado = 1 WHERE id = ?", [
+        id,
+      ]);
+    }
+  });
+}
+
+// Veiculos Sync & Queries
+
+export async function clearVeiculos() {
+  const db = await getDB();
+  await db.execAsync("DELETE FROM Veiculos");
+}
+
+export async function insertVeiculos(veiculos: any[]) {
+  const db = await getDB();
+  await db.withTransactionAsync(async () => {
+    for (const v of veiculos) {
+      await db.runAsync(
+        "INSERT OR REPLACE INTO Veiculos (placa, descricao) VALUES (?, ?)",
+        [v.placa, v.descricao],
+      );
+    }
+  });
+}
+
+export async function findVeiculoByPlaca(placa: string) {
+  const db = await getDB();
+  const result = await db.getFirstAsync(
+    "SELECT * FROM Veiculos WHERE placa = ?",
+    [placa],
+  );
+  return result as any;
+}
+
+export async function saveLeituraVeiculo(
+  id: string,
+  placa: string,
+  matricula_condutor: string,
+  nome_condutor: string,
+  credencial_condutor: string,
+  id_portaria: number,
+  sentido: string,
+  data_hora_leitura: string,
+  id_celular: string,
+  situacao: number,
+) {
+  const db = await getDB();
+  await db.runAsync(
+    "INSERT INTO LeiturasVeiculos (id, placa, matricula_condutor, nome_condutor, credencial_condutor, id_portaria, sentido, data_hora_leitura, id_celular, situacao, sincronizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+    [id, placa, matricula_condutor, nome_condutor, credencial_condutor, id_portaria, sentido, data_hora_leitura, id_celular, situacao],
+  );
+}
+
+export async function getUnsyncedLeiturasVeiculos() {
+  const db = await getDB();
+  const results = await db.getAllAsync(
+    "SELECT * FROM LeiturasVeiculos WHERE sincronizado = 0",
+  );
+  return results as any[];
+}
+
+export async function markLeiturasVeiculosAsSynced(ids: string[]) {
+  if (ids.length === 0) return;
+  const db = await getDB();
+  await db.withTransactionAsync(async () => {
+    for (const id of ids) {
+      await db.runAsync("UPDATE LeiturasVeiculos SET sincronizado = 1 WHERE id = ?", [
         id,
       ]);
     }

@@ -9,8 +9,10 @@
     "lint": "expo lint"
   },
   "dependencies": {
+    "@react-native-ml-kit/text-recognition": "^2.0.0",
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",
+    "expo-camera": "~17.0.10",
     "expo-device": "~8.0.10",
     "expo-secure-store": "~15.0.8",
     "expo-sqlite": "~16.0.10",

@@ -12,6 +12,8 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { CameraView, useCameraPermissions } from "expo-camera";
+import TextRecognition from "@react-native-ml-kit/text-recognition";
 import NfcManager, { NfcEvents } from "react-native-nfc-manager";
 import { apiFetch, getApiUrl, setApiUrl, setToken } from "./src/api";
 import {
@@ -22,6 +24,12 @@ import {
     insertPessoas,
     markLeiturasAsSynced,
     saveLeitura,
+    clearVeiculos,
+    insertVeiculos,
+    findVeiculoByPlaca,
+    saveLeituraVeiculo,
+    getUnsyncedLeiturasVeiculos,
+    markLeiturasVeiculosAsSynced
 } from "./src/database";
 
 // Paleta fornecida:
@@ -59,7 +67,7 @@ function hexToDec(hex: string) {
   }
 }
 
-type Screen = "LOGIN" | "PORTARIA" | "DASHBOARD" | "READING";
+type Screen = "LOGIN" | "PORTARIA" | "DASHBOARD" | "READING" | "CAMERA_PLACA";
 
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
@@ -79,11 +87,22 @@ export default function App() {
   const [lastSyncPessoas, setLastSyncPessoas] = useState<string | null>(null);
   const [lastSyncLeituras, setLastSyncLeituras] = useState<string | null>(null);
   const [leiturasPendentes, setLeiturasPendentes] = useState<number>(0);
+  const [leiturasVeiculosPendentes, setLeiturasVeiculosPendentes] = useState<number>(0);
+  const [lastSyncVeiculos, setLastSyncVeiculos] = useState<string | null>(null);
+  const [lastSyncLeiturasVeiculos, setLastSyncLeiturasVeiculos] = useState<string | null>(null);
+
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<any>(null);
+  const [placaLida, setPlacaLida] = useState<any>(null);
+  const [aguardandoNfcCondutor, setAguardandoNfcCondutor] = useState(false);
+  const [sentidoVeiculo, setSentidoVeiculo] = useState<"ENTRADA" | "SAIDA">("ENTRADA");
 
   const refreshPendingLeituras = async () => {
     try {
       const unsynced = await getUnsyncedLeituras();
       setLeiturasPendentes(unsynced.length);
+      const unsyncedV = await getUnsyncedLeiturasVeiculos();
+      setLeiturasVeiculosPendentes(unsyncedV.length);
     } catch (e) {
       console.warn("Erro ao carregar leituras pendentes:", e);
     }
@@ -112,9 +131,15 @@ export default function App() {
         // Carregar última sincronização
         const lastPessoas = await SecureStore.getItemAsync("last_sync_pessoas");
         if (lastPessoas) setLastSyncPessoas(lastPessoas);
-        const lastLeituras =
-          await SecureStore.getItemAsync("last_sync_leituras");
+        const lastLeituras = await SecureStore.getItemAsync("last_sync_leituras");
         if (lastLeituras) setLastSyncLeituras(lastLeituras);
+        
+        const lastVeiculos = await SecureStore.getItemAsync("last_sync_veiculos");
+        if (lastVeiculos) setLastSyncVeiculos(lastVeiculos);
+
+        const lastLeiturasVeic = await SecureStore.getItemAsync("last_sync_leituras_veiculos");
+        if (lastLeiturasVeic) setLastSyncLeiturasVeiculos(lastLeiturasVeic);
+
         await refreshPendingLeituras();
       } catch (err) {
         console.error("DB Init error", err);
@@ -281,6 +306,74 @@ export default function App() {
     }
   };
 
+  const syncVeiculosAPI = async () => {
+    setLoading(true);
+    try {
+      const veiculos = await apiFetch("/veiculos");
+      await clearVeiculos();
+      await insertVeiculos(veiculos);
+      const now = new Date().toLocaleString("pt-BR");
+      setLastSyncVeiculos(now);
+      await SecureStore.setItemAsync("last_sync_veiculos", now);
+      Alert.alert(
+        "Sucesso",
+        `${veiculos.length} veículos sincronizados (API -> Celular).\nÚltima sincronização: ${now}`
+      );
+    } catch (err: any) {
+      Alert.alert("Erro na Sincronização de Veículos", err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const syncLeiturasVeiculosAPI = async () => {
+    setLoading(true);
+    try {
+      const unsynced = await getUnsyncedLeiturasVeiculos();
+      setLeiturasVeiculosPendentes(unsynced.length);
+      if (unsynced.length === 0) {
+        Alert.alert("Sincronização", "Nenhuma leitura de veículo pendente para envio.");
+        setLoading(false);
+        return;
+      }
+
+      const payload = unsynced.map((u) => ({
+        id: u.id,
+        placa: u.placa,
+        matricula_condutor: u.matricula_condutor,
+        nome_condutor: u.nome_condutor,
+        credencial_condutor: u.credencial_condutor,
+        id_portaria: u.id_portaria,
+        sentido: u.sentido,
+        data_hora_leitura: u.data_hora_leitura,
+        id_celular: u.id_celular,
+        situacao: u.situacao,
+      }));
+
+      const res = await apiFetch("/sync/leituras-veiculo", {
+        method: "POST",
+        body: JSON.stringify({ leituras: payload }),
+      });
+
+      const ids = unsynced.map((u) => u.id);
+      await markLeiturasVeiculosAsSynced(ids);
+      setLeiturasVeiculosPendentes(0);
+
+      const now = new Date().toLocaleString("pt-BR");
+      setLastSyncLeiturasVeiculos(now);
+      await SecureStore.setItemAsync("last_sync_leituras_veiculos", now);
+
+      Alert.alert(
+        "Sucesso",
+        `${res.count} leituras de veículos enviadas para o servidor.\nÚltima sincronização: ${now}`
+      );
+    } catch (err: any) {
+      Alert.alert("Erro na Sincronização", err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     Alert.alert("Logout", "Deseja realmente sair do aplicativo?", [
       { text: "Cancelar", style: "cancel" },
@@ -411,6 +504,120 @@ export default function App() {
     setCurrentScreen("DASHBOARD");
   };
 
+  const capturarPlaca = async () => {
+    if (!cameraRef.current) return;
+    try {
+      setLoading(true);
+      const photo = await cameraRef.current.takePictureAsync({ base64: false });
+      const result = await TextRecognition.recognize(photo.uri);
+      
+      const regexPlaca = /[a-zA-Z]{3}[0-9][A-Za-z0-9][0-9]{2}/g;
+      
+      const allText = result.blocks.map(b => b.text).join(" ").replace(/[^a-zA-Z0-9]/g, "");
+      
+      let placaEncontrada = "";
+      const matches = allText.match(/[a-zA-Z]{3}[0-9][A-Za-z0-9][0-9]{2}/g);
+      
+      if (matches && matches.length > 0) {
+        placaEncontrada = matches[0].toUpperCase();
+      } else if (allText.length >= 7) {
+        placaEncontrada = allText.substring(0, 7).toUpperCase();
+      }
+
+      if (!placaEncontrada) {
+        Alert.alert("Erro", "Nenhuma placa identificada na imagem. Tente novamente.");
+        setLoading(false);
+        return;
+      }
+
+      const veiculo = await findVeiculoByPlaca(placaEncontrada);
+      if (!veiculo) {
+        playFeedbackSound(false);
+        Alert.alert("Bloqueado", `Placa ${placaEncontrada} não encontrada no cadastro de veículos.`);
+        setLoading(false);
+        return;
+      }
+
+      setPlacaLida(veiculo);
+      setAguardandoNfcCondutor(true);
+      playFeedbackSound(true);
+
+      NfcManager.setEventListener(NfcEvents.DiscoverTag, async (tag: any) => {
+        try {
+          const now = Date.now();
+          if (now - lastReadTimeRef.current < 1000) return;
+          lastReadTimeRef.current = now;
+
+          let tagSignature = "";
+          if (tag.id) {
+            if (Array.isArray(tag.id) || tag.id instanceof Uint8Array) {
+              tagSignature = bytesToHex(tag.id as any);
+            } else if (typeof tag.id === "string") {
+              tagSignature = tag.id.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+            }
+          }
+
+          const reversedHex = reverseHex(tagSignature);
+          const reversedDec = hexToDec(reversedHex);
+
+          const pessoa = await findPessoaByCredencial(reversedDec);
+          const situacaoCode = pessoa ? pessoa.situacao : 0;
+          const nome = pessoa ? pessoa.nome : "Não Cadastrado";
+          const matricula = pessoa ? pessoa.matricula : "-";
+
+          const uuid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+          const idCelular = Device.osBuildId || "CELULAR_DESCONHECIDO";
+
+          await saveLeituraVeiculo(
+            uuid,
+            veiculo.placa,
+            matricula,
+            nome,
+            reversedDec,
+            selectedPortaria.id,
+            sentidoVeiculo,
+            new Date().toISOString(),
+            idCelular,
+            situacaoCode
+          );
+
+          playFeedbackSound(situacaoCode === 1);
+          await refreshPendingLeituras();
+
+          Alert.alert(
+            situacaoCode === 1 ? "Acesso Permitido" : "Acesso Bloqueado",
+            `Veículo: ${veiculo.placa}\nCondutor: ${nome}`,
+            [
+              { text: "OK", onPress: () => {
+                setPlacaLida(null);
+                setAguardandoNfcCondutor(false);
+                NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
+              }}
+            ]
+          );
+        } catch (err: any) {
+          playFeedbackSound(false);
+          Alert.alert("Erro ao ler cartão", err.message);
+        }
+      });
+
+      await NfcManager.registerTagEvent();
+
+    } catch (e: any) {
+      Alert.alert("Erro ao capturar placa", e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const stopCameraMode = () => {
+    NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
+    NfcManager.unregisterTagEvent().catch(() => {});
+    setPlacaLida(null);
+    setAguardandoNfcCondutor(false);
+    setCurrentScreen("DASHBOARD");
+  };
+
   if (!isDbReady) {
     return (
       <View style={styles.center}>
@@ -526,6 +733,16 @@ export default function App() {
             <Text style={styles.syncInfoText}>
               Registros pendentes: {leiturasPendentes}
             </Text>
+            <View style={{height: 1, backgroundColor: '#ccc', marginVertical: 8}}/>
+            <Text style={styles.syncInfoText}>
+              Veículos (API→Celular): {lastSyncVeiculos || "Nunca sincronizado"}
+            </Text>
+            <Text style={styles.syncInfoText}>
+              Leituras Veículo (Celular→API): {lastSyncLeiturasVeiculos || "Nunca sincronizado"}
+            </Text>
+            <Text style={styles.syncInfoText}>
+              Leituras Veículo Pendentes: {leiturasVeiculosPendentes}
+            </Text>
           </View>
 
           <TouchableOpacity
@@ -561,6 +778,53 @@ export default function App() {
           >
             <Text style={styles.dashboardBtnText}>
               3. Sincronizar Leituras (Celular {"->"} API)
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.dashboardBtn, { backgroundColor: "#8E44AD", marginTop: 20 }]}
+            onPress={syncVeiculosAPI}
+            disabled={loading}
+          >
+            <Text style={styles.dashboardBtnText}>
+              4. Sincronizar Veículos (API {"->"} Celular)
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.dashboardBtn,
+              { backgroundColor: "#2980B9", marginTop: 20 },
+            ]}
+            onPress={async () => {
+              if (!cameraPermission?.granted) {
+                const p = await requestCameraPermission();
+                if (!p.granted) return Alert.alert("Erro", "Permissão de câmera negada");
+              }
+              if (hasNfc === null) {
+                return Alert.alert("Aguarde", "Verificando NFC...");
+              }
+              setPlacaLida(null);
+              setAguardandoNfcCondutor(false);
+              setCurrentScreen("CAMERA_PLACA");
+            }}
+            disabled={loading}
+          >
+            <Text style={styles.dashboardBtnText}>
+              5. Modo Leitura de Placa e Cartão
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.dashboardBtn,
+              { backgroundColor: "#E67E22", marginTop: 20 },
+            ]}
+            onPress={syncLeiturasVeiculosAPI}
+            disabled={loading}
+          >
+            <Text style={styles.dashboardBtnText}>
+              6. Sincronizar Leit. Veículos (Celular {"->"} API)
             </Text>
           </TouchableOpacity>
 
@@ -642,6 +906,76 @@ export default function App() {
             onPress={stopReadingMode}
           >
             <Text style={styles.buttonText}>Sair do Modo Leitura</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* CAMERA SCREEN */}
+      {currentScreen === "CAMERA_PLACA" && (
+        <View style={styles.readingContainer}>
+          <View style={styles.readingTop}>
+            <Text style={styles.pulseText}>Leitura de Veículos</Text>
+            <Text style={styles.pulseSubText}>
+              {aguardandoNfcCondutor ? `Placa Lida: ${placaLida?.placa}. Aproxime o cartão do condutor.` : "Centralize a placa e capture a imagem."}
+            </Text>
+          </View>
+
+          <View style={{ flex: 1, backgroundColor: "#000", overflow: "hidden" }}>
+            {!aguardandoNfcCondutor ? (
+              <CameraView 
+                style={{ flex: 1 }} 
+                facing="back" 
+                ref={cameraRef}
+              >
+                <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'flex-end', padding: 20 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+                    <TouchableOpacity
+                      style={[styles.button, { flex: 1, marginRight: 5, backgroundColor: sentidoVeiculo === "ENTRADA" ? "#217346" : "rgba(33, 115, 70, 0.4)" }]}
+                      onPress={() => setSentidoVeiculo("ENTRADA")}
+                    >
+                      <Text style={styles.buttonText}>ENTRADA</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.button, { flex: 1, marginLeft: 5, backgroundColor: sentidoVeiculo === "SAIDA" ? "#E74C3C" : "rgba(231, 76, 60, 0.4)" }]}
+                      onPress={() => setSentidoVeiculo("SAIDA")}
+                    >
+                      <Text style={styles.buttonText}>SAÍDA</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.button, { backgroundColor: "#3269D9", marginBottom: 15 }]}
+                    onPress={capturarPlaca}
+                    disabled={loading}
+                  >
+                    {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>Capturar Placa</Text>}
+                  </TouchableOpacity>
+                </View>
+              </CameraView>
+            ) : (
+              <View style={styles.resultArea}>
+                <View style={[styles.resultCard, { borderColor: "#3269D9" }]}>
+                  <Text style={[styles.resultStatus, { color: "#3269D9" }]}>
+                    AGUARDANDO NFC
+                  </Text>
+                  <Text style={styles.resultLabel}>Placa Identificada:</Text>
+                  <Text style={styles.resultValue}>{placaLida.placa}</Text>
+                  <Text style={styles.resultLabel}>Descrição:</Text>
+                  <Text style={styles.resultValue}>{placaLida.descricao}</Text>
+                  
+                  <Text style={[styles.resultLabel, {marginTop: 20, textAlign: 'center'}]}>
+                    Aproxime o cartão do condutor no sensor NFC do celular.
+                  </Text>
+                  <ActivityIndicator size="large" color="#3269D9" style={{marginTop: 15}} />
+                </View>
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.button, { backgroundColor: "#E74C3C", margin: 20 }]}
+            onPress={stopCameraMode}
+          >
+            <Text style={styles.buttonText}>Sair</Text>
           </TouchableOpacity>
         </View>
       )}
