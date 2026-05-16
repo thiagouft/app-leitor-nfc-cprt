@@ -243,130 +243,110 @@ export default function App() {
     setCurrentScreen("DASHBOARD");
   };
 
-  const syncPessoasAPI = async () => {
+  const syncDataAPItoMobile = async () => {
     setLoading(true);
     try {
+      // Sync Pessoas
       const pessoas = await apiFetch("/pessoas");
       await clearPessoas();
       await insertPessoas(pessoas);
-      const now = new Date().toLocaleString("pt-BR");
-      setLastSyncPessoas(now);
-      await SecureStore.setItemAsync("last_sync_pessoas", now);
-      Alert.alert(
-        "Sucesso",
-        `${pessoas.length} registros sincronizados (API -> Celular).\nÚltima sincronização: ${now}`,
-      );
-    } catch (err: any) {
-      Alert.alert("Erro na Sincronização", err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+      const nowPessoas = new Date().toLocaleString("pt-BR");
+      setLastSyncPessoas(nowPessoas);
+      await SecureStore.setItemAsync("last_sync_pessoas", nowPessoas);
 
-  const syncLeiturasAPI = async () => {
-    setLoading(true);
-    try {
-      const unsynced = await getUnsyncedLeituras();
-      setLeiturasPendentes(unsynced.length);
-      if (unsynced.length === 0) {
-        Alert.alert("Sincronização", "Nenhuma leitura pendente para envio.");
-        setLoading(false);
-        return;
-      }
-
-      const payload = unsynced.map((u) => ({
-        credencial: u.credencial,
-        id_portaria: u.id_portaria,
-        data_hora_leitura: u.data_hora_leitura,
-        id_celular: u.id_celular,
-        situacao: u.situacao,
-      }));
-
-      const res = await apiFetch("/sync", {
-        method: "POST",
-        body: JSON.stringify({ leituras: payload }),
-      });
-
-      const ids = unsynced.map((u) => u.id);
-      await markLeiturasAsSynced(ids);
-      setLeiturasPendentes(0);
-
-      const now = new Date().toLocaleString("pt-BR");
-      setLastSyncLeituras(now);
-      await SecureStore.setItemAsync("last_sync_leituras", now);
-
-      Alert.alert(
-        "Sucesso",
-        `${res.count} registros enviados para o servidor.\nÚltima sincronização: ${now}`,
-      );
-    } catch (err: any) {
-      Alert.alert("Erro na Sincronização", err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const syncVeiculosAPI = async () => {
-    setLoading(true);
-    try {
+      // Sync Veiculos
       const veiculos = await apiFetch("/veiculos");
       await clearVeiculos();
       await insertVeiculos(veiculos);
-      const now = new Date().toLocaleString("pt-BR");
-      setLastSyncVeiculos(now);
-      await SecureStore.setItemAsync("last_sync_veiculos", now);
+      const nowVeiculos = new Date().toLocaleString("pt-BR");
+      setLastSyncVeiculos(nowVeiculos);
+      await SecureStore.setItemAsync("last_sync_veiculos", nowVeiculos);
+
       Alert.alert(
         "Sucesso",
-        `${veiculos.length} veículos sincronizados (API -> Celular).\nÚltima sincronização: ${now}`
+        `Cadastros atualizados (API -> Celular).\nPessoas: ${pessoas.length}\nVeículos: ${veiculos.length}`
       );
     } catch (err: any) {
-      Alert.alert("Erro na Sincronização de Veículos", err.message);
+      Alert.alert("Erro na Sincronização", err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const syncLeiturasVeiculosAPI = async () => {
+  const syncDataMobiletoAPI = async () => {
     setLoading(true);
     try {
-      const unsynced = await getUnsyncedLeiturasVeiculos();
-      setLeiturasVeiculosPendentes(unsynced.length);
-      if (unsynced.length === 0) {
-        Alert.alert("Sincronização", "Nenhuma leitura de veículo pendente para envio.");
-        setLoading(false);
-        return;
+      let leiturasMsg = "Nenhuma pessoa pendente.";
+      let veiculosMsg = "Nenhum veículo pendente.";
+      let syncedSomething = false;
+
+      // Sync Leituras Pessoas
+      const unsyncedPessoas = await getUnsyncedLeituras();
+      if (unsyncedPessoas.length > 0) {
+        const payloadPessoas = unsyncedPessoas.map((u) => ({
+          credencial: u.credencial,
+          id_portaria: u.id_portaria,
+          data_hora_leitura: u.data_hora_leitura,
+          id_celular: u.id_celular,
+          situacao: u.situacao,
+        }));
+
+        const resPessoas = await apiFetch("/sync", {
+          method: "POST",
+          body: JSON.stringify({ leituras: payloadPessoas }),
+        });
+
+        const idsPessoas = unsyncedPessoas.map((u) => u.id);
+        await markLeiturasAsSynced(idsPessoas);
+        setLeiturasPendentes(0);
+
+        const now = new Date().toLocaleString("pt-BR");
+        setLastSyncLeituras(now);
+        await SecureStore.setItemAsync("last_sync_leituras", now);
+        leiturasMsg = `${resPessoas.count} leituras de pessoas.`;
+        syncedSomething = true;
       }
 
-      const payload = unsynced.map((u) => ({
-        id: u.id,
-        placa: u.placa,
-        matricula_condutor: u.matricula_condutor,
-        nome_condutor: u.nome_condutor,
-        credencial_condutor: u.credencial_condutor,
-        id_portaria: u.id_portaria,
-        sentido: u.sentido,
-        data_hora_leitura: u.data_hora_leitura,
-        id_celular: u.id_celular,
-        situacao: u.situacao,
-      }));
+      // Sync Leituras Veiculos
+      const unsyncedVeiculos = await getUnsyncedLeiturasVeiculos();
+      if (unsyncedVeiculos.length > 0) {
+        const payloadVeiculos = unsyncedVeiculos.map((u) => ({
+          id: u.id,
+          placa: u.placa,
+          matricula_condutor: u.matricula_condutor,
+          nome_condutor: u.nome_condutor,
+          credencial_condutor: u.credencial_condutor,
+          id_portaria: u.id_portaria,
+          sentido: u.sentido,
+          data_hora_leitura: u.data_hora_leitura,
+          id_celular: u.id_celular,
+          situacao: u.situacao,
+        }));
 
-      const res = await apiFetch("/sync/leituras-veiculo", {
-        method: "POST",
-        body: JSON.stringify({ leituras: payload }),
-      });
+        const resVeiculos = await apiFetch("/sync/leituras-veiculo", {
+          method: "POST",
+          body: JSON.stringify({ leituras: payloadVeiculos }),
+        });
 
-      const ids = unsynced.map((u) => u.id);
-      await markLeiturasVeiculosAsSynced(ids);
-      setLeiturasVeiculosPendentes(0);
+        const idsVeiculos = unsyncedVeiculos.map((u) => u.id);
+        await markLeiturasVeiculosAsSynced(idsVeiculos);
+        setLeiturasVeiculosPendentes(0);
 
-      const now = new Date().toLocaleString("pt-BR");
-      setLastSyncLeiturasVeiculos(now);
-      await SecureStore.setItemAsync("last_sync_leituras_veiculos", now);
+        const now = new Date().toLocaleString("pt-BR");
+        setLastSyncLeiturasVeiculos(now);
+        await SecureStore.setItemAsync("last_sync_leituras_veiculos", now);
+        veiculosMsg = `${resVeiculos.count} leituras de veículos.`;
+        syncedSomething = true;
+      }
 
-      Alert.alert(
-        "Sucesso",
-        `${res.count} leituras de veículos enviadas para o servidor.\nÚltima sincronização: ${now}`
-      );
+      if (syncedSomething) {
+        Alert.alert(
+          "Sucesso",
+          `Envio concluído (Celular -> API).\n\nEnviados:\n- ${leiturasMsg}\n- ${veiculosMsg}`
+        );
+      } else {
+        Alert.alert("Sincronização", "Nenhum registro pendente para envio.");
+      }
     } catch (err: any) {
       Alert.alert("Erro na Sincronização", err.message);
     } finally {
@@ -747,11 +727,11 @@ export default function App() {
 
           <TouchableOpacity
             style={[styles.dashboardBtn, { backgroundColor: "#36BF8D" }]}
-            onPress={syncPessoasAPI}
+            onPress={syncDataAPItoMobile}
             disabled={loading}
           >
             <Text style={styles.dashboardBtnText}>
-              1. Sincronizar Pessoas (API {"->"} Celular)
+              1. Baixar Cadastros (API {"->"} Celular)
             </Text>
           </TouchableOpacity>
 
@@ -765,29 +745,6 @@ export default function App() {
           >
             <Text style={styles.dashboardBtnText}>
               2. Modo Leitura de Cartão
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.dashboardBtn,
-              { backgroundColor: "#F39C12", marginTop: 20 },
-            ]}
-            onPress={syncLeiturasAPI}
-            disabled={loading}
-          >
-            <Text style={styles.dashboardBtnText}>
-              3. Sincronizar Leituras (Celular {"->"} API)
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.dashboardBtn, { backgroundColor: "#8E44AD", marginTop: 20 }]}
-            onPress={syncVeiculosAPI}
-            disabled={loading}
-          >
-            <Text style={styles.dashboardBtnText}>
-              4. Sincronizar Veículos (API {"->"} Celular)
             </Text>
           </TouchableOpacity>
 
@@ -811,20 +768,20 @@ export default function App() {
             disabled={loading}
           >
             <Text style={styles.dashboardBtnText}>
-              5. Modo Leitura de Placa e Cartão
+              3. Modo Leitura de Placa e Cartão
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[
               styles.dashboardBtn,
-              { backgroundColor: "#E67E22", marginTop: 20 },
+              { backgroundColor: "#F39C12", marginTop: 20 },
             ]}
-            onPress={syncLeiturasVeiculosAPI}
+            onPress={syncDataMobiletoAPI}
             disabled={loading}
           >
             <Text style={styles.dashboardBtnText}>
-              6. Sincronizar Leit. Veículos (Celular {"->"} API)
+              4. Enviar Leituras (Celular {"->"} API)
             </Text>
           </TouchableOpacity>
 
