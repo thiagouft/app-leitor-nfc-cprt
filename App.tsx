@@ -95,6 +95,7 @@ export default function App() {
   const cameraRef = useRef<any>(null);
   const [placaLida, setPlacaLida] = useState<any>(null);
   const [aguardandoNfcCondutor, setAguardandoNfcCondutor] = useState(false);
+  const [modoPassageiros, setModoPassageiros] = useState(false);
   const [sentidoVeiculo, setSentidoVeiculo] = useState<"ENTRADA" | "SAIDA">("ENTRADA");
 
   const refreshPendingLeituras = async () => {
@@ -321,6 +322,7 @@ export default function App() {
           data_hora_leitura: u.data_hora_leitura,
           id_celular: u.id_celular,
           situacao: u.situacao,
+          is_condutor: u.is_condutor === 1,
         }));
 
         const resVeiculos = await apiFetch("/sync/leituras-veiculo", {
@@ -548,6 +550,8 @@ export default function App() {
           const uuid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
           const idCelular = Device.osBuildId || "CELULAR_DESCONHECIDO";
 
+          const isCondutorVal = !modoPassageiros ? 1 : 0;
+
           await saveLeituraVeiculo(
             uuid,
             veiculo.placa,
@@ -558,23 +562,24 @@ export default function App() {
             sentidoVeiculo,
             new Date().toISOString(),
             idCelular,
-            situacaoCode
+            situacaoCode,
+            isCondutorVal
           );
 
           playFeedbackSound(situacaoCode === 1);
           await refreshPendingLeituras();
 
-          Alert.alert(
-            situacaoCode === 1 ? "Acesso Permitido" : "Acesso Bloqueado",
-            `Veículo: ${veiculo.placa}\nCondutor: ${nome}`,
-            [
-              { text: "OK", onPress: () => {
-                setPlacaLida(null);
-                setAguardandoNfcCondutor(false);
-                NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
-              }}
-            ]
-          );
+          const wasCondutor = !modoPassageiros;
+          setLastRead({
+            situacao: situacaoCode,
+            nome: nome,
+            matricula: matricula,
+            credencial: reversedDec,
+            is_condutor: wasCondutor
+          });
+          if (wasCondutor) {
+            setModoPassageiros(true);
+          }
         } catch (err: any) {
           playFeedbackSound(false);
           Alert.alert("Erro ao ler cartão", err.message);
@@ -595,6 +600,8 @@ export default function App() {
     NfcManager.unregisterTagEvent().catch(() => {});
     setPlacaLida(null);
     setAguardandoNfcCondutor(false);
+    setModoPassageiros(false);
+    setLastRead(null);
     setCurrentScreen("DASHBOARD");
   };
 
@@ -763,6 +770,8 @@ export default function App() {
               }
               setPlacaLida(null);
               setAguardandoNfcCondutor(false);
+              setModoPassageiros(false);
+              setLastRead(null);
               setCurrentScreen("CAMERA_PLACA");
             }}
             disabled={loading}
@@ -873,7 +882,9 @@ export default function App() {
           <View style={styles.readingTop}>
             <Text style={styles.pulseText}>Leitura de Veículos</Text>
             <Text style={styles.pulseSubText}>
-              {aguardandoNfcCondutor ? `Placa Lida: ${placaLida?.placa}. Aproxime o cartão do condutor.` : "Centralize a placa e capture a imagem."}
+              {aguardandoNfcCondutor 
+                ? (modoPassageiros ? `Veículo ${placaLida?.placa}. Lendo Passageiros.` : `Placa Lida: ${placaLida?.placa}. Aproxime o cartão do condutor.`) 
+                : "Centralize a placa e capture a imagem."}
             </Text>
           </View>
 
@@ -920,10 +931,58 @@ export default function App() {
                   <Text style={styles.resultValue}>{placaLida.descricao}</Text>
                   
                   <Text style={[styles.resultLabel, {marginTop: 20, textAlign: 'center'}]}>
-                    Aproxime o cartão do condutor no sensor NFC do celular.
+                    {modoPassageiros ? "Aproxime o cartão do PASSAGEIRO." : "Aproxime o cartão do CONDUTOR no sensor NFC do celular."}
                   </Text>
-                  <ActivityIndicator size="large" color="#3269D9" style={{marginTop: 15}} />
+                  
+                  {lastRead && (
+                    <View
+                      style={[
+                        styles.resultCard,
+                        {
+                          borderColor: lastRead.situacao === 1 ? "#36BF8D" : "#E74C3C",
+                          marginTop: 15,
+                          backgroundColor: "#FFFFFF",
+                          padding: 15
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.resultStatus,
+                          { color: lastRead.situacao === 1 ? "#36BF8D" : "#E74C3C", fontSize: 16 },
+                        ]}
+                      >
+                        {lastRead.situacao === 1
+                          ? `PERMITIDO (${lastRead.is_condutor ? 'CONDUTOR' : 'PASSAGEIRO'})`
+                          : `BLOQUEADO (${lastRead.is_condutor ? 'CONDUTOR' : 'PASSAGEIRO'})`}
+                      </Text>
+                      <Text style={styles.resultLabel}>Nome:</Text>
+                      <Text style={[styles.resultValue, {fontSize: 16}]}>{lastRead.nome}</Text>
+
+                      <Text style={styles.resultLabel}>Matrícula:</Text>
+                      <Text style={[styles.resultValue, {fontSize: 16}]}>{lastRead.matricula}</Text>
+
+                      <Text style={styles.resultLabel}>Credencial:</Text>
+                      <Text style={[styles.resultValue, {fontSize: 16}]}>{lastRead.credencial}</Text>
+                    </View>
+                  )}
+
+                  {!lastRead && <ActivityIndicator size="large" color="#3269D9" style={{marginTop: 15}} />}
                 </View>
+                {modoPassageiros && (
+                  <TouchableOpacity
+                    style={[styles.button, { backgroundColor: "#E74C3C", marginTop: 20 }]}
+                    onPress={() => {
+                      setPlacaLida(null);
+                      setAguardandoNfcCondutor(false);
+                      setModoPassageiros(false);
+                      setLastRead(null);
+                      NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
+                    }}
+                  >
+                    <Text style={styles.buttonText}>Finalizar Veículo e Ler Nova Placa</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
           </View>

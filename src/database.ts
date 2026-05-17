@@ -67,6 +67,12 @@ export async function initDB() {
   } catch (e) {
     // Ignora
   }
+
+  try {
+    await db.execAsync(`ALTER TABLE LeiturasVeiculos ADD COLUMN is_condutor INTEGER;`);
+  } catch (e) {
+    // Ignora
+  }
 }
 
 export async function clearPessoas() {
@@ -169,11 +175,12 @@ export async function saveLeituraVeiculo(
   data_hora_leitura: string,
   id_celular: string,
   situacao: number,
+  is_condutor: number
 ) {
   const db = await getDB();
   await db.runAsync(
-    "INSERT INTO LeiturasVeiculos (id, placa, matricula_condutor, nome_condutor, credencial_condutor, id_portaria, sentido, data_hora_leitura, id_celular, situacao, sincronizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-    [id, placa, matricula_condutor, nome_condutor, credencial_condutor, id_portaria, sentido, data_hora_leitura, id_celular, situacao],
+    "INSERT INTO LeiturasVeiculos (id, placa, matricula_condutor, nome_condutor, credencial_condutor, id_portaria, sentido, data_hora_leitura, id_celular, situacao, is_condutor, sincronizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+    [id, placa, matricula_condutor, nome_condutor, credencial_condutor, id_portaria, sentido, data_hora_leitura, id_celular, situacao, is_condutor],
   );
 }
 
