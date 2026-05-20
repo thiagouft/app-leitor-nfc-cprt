@@ -96,6 +96,11 @@ export default function App() {
   const [placaLida, setPlacaLida] = useState<any>(null);
   const [aguardandoNfcCondutor, setAguardandoNfcCondutor] = useState(false);
   const [modoPassageiros, setModoPassageiros] = useState(false);
+  const modoPassageirosRef = useRef(false);
+  const setModoPassageirosSync = (val: boolean) => {
+    modoPassageirosRef.current = val;
+    setModoPassageiros(val);
+  };
   const [sentidoVeiculo, setSentidoVeiculo] = useState<"ENTRADA" | "SAIDA">("ENTRADA");
 
   const refreshPendingLeituras = async () => {
@@ -174,8 +179,9 @@ export default function App() {
         await ExpoAudio.setAudioModeAsync({
           playsInSilentModeIOS: true,
           allowsRecordingIOS: false,
-          staysActiveInBackground: false,
+          staysActiveInBackground: true,
           shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
         });
 
         const { sound: successSound } = await ExpoAudio.Sound.createAsync(
@@ -387,7 +393,16 @@ export default function App() {
         await sound.stopAsync();
       }
       await sound.setPositionAsync(0);
-      await sound.playAsync();
+      
+      // Pequeno delay para garantir que o sistema Android devolva o foco de áudio
+      // após usar a Câmera ou após o serviço de NFC do sistema atuar.
+      setTimeout(async () => {
+        try {
+          await sound.playAsync();
+        } catch (e) {
+          console.log("Ignored audio focus error on retry:", e);
+        }
+      }, 150);
     } catch (e) {
       console.warn("Sound play error:", e);
     }
@@ -550,7 +565,7 @@ export default function App() {
           const uuid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
           const idCelular = Device.osBuildId || "CELULAR_DESCONHECIDO";
 
-          const isCondutorVal = !modoPassageiros ? 1 : 0;
+          const isCondutorVal = !modoPassageirosRef.current ? 1 : 0;
 
           await saveLeituraVeiculo(
             uuid,
@@ -569,7 +584,7 @@ export default function App() {
           playFeedbackSound(situacaoCode === 1);
           await refreshPendingLeituras();
 
-          const wasCondutor = !modoPassageiros;
+          const wasCondutor = !modoPassageirosRef.current;
           setLastRead({
             situacao: situacaoCode,
             nome: nome,
@@ -578,7 +593,7 @@ export default function App() {
             is_condutor: wasCondutor
           });
           if (wasCondutor) {
-            setModoPassageiros(true);
+            setModoPassageirosSync(true);
           }
         } catch (err: any) {
           playFeedbackSound(false);
@@ -600,7 +615,7 @@ export default function App() {
     NfcManager.unregisterTagEvent().catch(() => {});
     setPlacaLida(null);
     setAguardandoNfcCondutor(false);
-    setModoPassageiros(false);
+    setModoPassageirosSync(false);
     setLastRead(null);
     setCurrentScreen("DASHBOARD");
   };
@@ -770,7 +785,7 @@ export default function App() {
               }
               setPlacaLida(null);
               setAguardandoNfcCondutor(false);
-              setModoPassageiros(false);
+              setModoPassageirosSync(false);
               setLastRead(null);
               setCurrentScreen("CAMERA_PLACA");
             }}
@@ -975,7 +990,7 @@ export default function App() {
                     onPress={() => {
                       setPlacaLida(null);
                       setAguardandoNfcCondutor(false);
-                      setModoPassageiros(false);
+                      setModoPassageirosSync(false);
                       setLastRead(null);
                       NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
                     }}
