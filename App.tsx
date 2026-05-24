@@ -123,6 +123,10 @@ export default function App() {
     error?: ExpoAudio.Sound;
   }>({});
 
+  // Controle de Lembrete de Sincronização
+  const lastPromptTimeRef = useRef<number>(0);
+  const isSyncPromptingRef = useRef<boolean>(false);
+
   useEffect(() => {
     async function setup() {
       try {
@@ -130,8 +134,12 @@ export default function App() {
         setIsDbReady(true);
         const savedUrl = await getApiUrl();
         setUrl(savedUrl);
+        const token = await SecureStore.getItemAsync("user_token");
         const pStr = await SecureStore.getItemAsync("selected_portaria");
-        if (pStr) {
+        if (token && pStr) {
+          setSelectedPortaria(JSON.parse(pStr));
+          setCurrentScreen("DASHBOARD");
+        } else if (pStr) {
           setSelectedPortaria(JSON.parse(pStr));
         }
         // Carregar última sincronização
@@ -211,6 +219,69 @@ export default function App() {
     };
   }, []);
 
+  // Lembrete periódico de sincronização (de hora em hora)
+  useEffect(() => {
+    if (currentScreen !== "DASHBOARD") return;
+
+    const checkAndPromptSync = async () => {
+      if (isSyncPromptingRef.current || loading) return;
+
+      try {
+        const lastSyncTsStr = await SecureStore.getItemAsync("last_sync_timestamp");
+        const now = Date.now();
+
+        let needSync = false;
+        if (!lastSyncTsStr) {
+          needSync = true;
+        } else {
+          const lastSyncTs = parseInt(lastSyncTsStr, 10);
+          const oneHour = 60 * 60 * 1000;
+          if (now - lastSyncTs > oneHour) {
+            if (now - lastPromptTimeRef.current > oneHour) {
+              needSync = true;
+            }
+          }
+        }
+
+        if (needSync) {
+          isSyncPromptingRef.current = true;
+          Alert.alert(
+            "Lembrete de Atualização",
+            "Faz mais de 1 hora desde a última sincronização de cadastros. Deseja atualizar os dados da API para o celular agora?",
+            [
+              {
+                text: "Adiar",
+                style: "cancel",
+                onPress: () => {
+                  lastPromptTimeRef.current = Date.now();
+                  isSyncPromptingRef.current = false;
+                }
+              },
+              {
+                text: "Atualizar Agora",
+                onPress: async () => {
+                  isSyncPromptingRef.current = false;
+                  await syncDataAPItoMobile();
+                }
+              }
+            ],
+            { cancelable: false }
+          );
+        }
+      } catch (err) {
+        console.warn("Erro ao verificar lembrete de sincronização:", err);
+      }
+    };
+
+    // Verifica ao carregar o dashboard/abrir app
+    checkAndPromptSync();
+
+    // Roda um timer para verificar a cada 1 minuto
+    const intervalId = setInterval(checkAndPromptSync, 60 * 1000);
+
+    return () => clearInterval(intervalId);
+  }, [currentScreen, loading]);
+
   const handleLogin = async () => {
     if (!url || !login || !senha)
       return Alert.alert("Erro", "Preencha todos os campos");
@@ -268,6 +339,9 @@ export default function App() {
       const nowVeiculos = new Date().toLocaleString("pt-BR");
       setLastSyncVeiculos(nowVeiculos);
       await SecureStore.setItemAsync("last_sync_veiculos", nowVeiculos);
+
+      // Salvar timestamp para controle de lembrete
+      await SecureStore.setItemAsync("last_sync_timestamp", Date.now().toString());
 
       Alert.alert(
         "Sucesso",
