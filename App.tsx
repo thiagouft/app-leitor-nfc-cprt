@@ -508,17 +508,126 @@ export default function App() {
       const photo = await cameraRef.current.takePictureAsync({ base64: false });
       const result = await TextRecognition.recognize(photo.uri);
       
-      const regexPlaca = /[a-zA-Z]{3}[0-9][A-Za-z0-9][0-9]{2}/g;
+      // Função para extrair candidatos de 7 caracteres a partir do texto
+      const getCandidates = (text: string): string[] => {
+        const cleaned = text.replace(/[^a-zA-Z0-9]/g, "");
+        const candidates: string[] = [];
+        for (let i = 0; i <= cleaned.length - 7; i++) {
+          candidates.push(cleaned.substring(i, i + 7));
+        }
+        return candidates;
+      };
+
+      // Função para pontuar o quão parecido um candidato é com uma placa brasileira
+      const scoreCandidate = (str: string): number => {
+        if (str.length !== 7) return -1;
+        let score = 0;
+        
+        // Posições 1, 2, 3 (letras)
+        for (let i = 0; i < 3; i++) {
+          if (/[a-zA-Z]/.test(str[i])) score += 2;
+          else if (/[01258]/.test(str[i])) score += 1; // números frequentemente confundidos
+        }
+        
+        // Posição 4 (número)
+        if (/[0-9]/.test(str[3])) score += 2;
+        else if (/[OQDLJTzSbB]/i.test(str[3])) score += 1; // letras frequentemente confundidas
+        
+        // Posição 7 (número)
+        if (/[0-9]/.test(str[6])) score += 2;
+        else if (/[OQDLJTzSbB]/i.test(str[6])) score += 1; // letras frequentemente confundidas
+
+        // Posições 5 e 6 (estruturas possíveis: Letra/Número, Número/Letra, Número/Número)
+        const c4 = str[4];
+        const c5 = str[5];
+        const isNum = (c: string) => /[0-9]/.test(c) || /[OQDLJTzSbB]/i.test(c);
+        const isLet = (c: string) => /[a-zA-Z]/.test(c) || /[01258]/.test(c);
+        
+        const matchTraditional = isNum(c4) && isNum(c5);
+        const matchMercosulCar = isLet(c4) && isNum(c5);
+        const matchMercosulMoto = isNum(c4) && isLet(c5);
+
+        if (matchTraditional || matchMercosulCar || matchMercosulMoto) {
+          score += 3;
+        }
+
+        return score;
+      };
+
+      // Função para corrigir a placa baseado em padrões de confusão de OCR (ex: O vs 0, I vs 1)
+      const correctPlate = (str: string): string => {
+        str = str.toUpperCase();
+        
+        const forceLetter = (char: string) => {
+          const map: { [key: string]: string } = { '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B' };
+          return map[char] || char;
+        };
+
+        const forceNumber = (char: string) => {
+          const map: { [key: string]: string } = { 'O': '0', 'Q': '0', 'D': '0', 'I': '1', 'L': '1', 'J': '1', 'T': '1', 'Z': '2', 'S': '5', 'B': '8' };
+          return map[char] || char;
+        };
+
+        const pos0 = forceLetter(str[0]);
+        const pos1 = forceLetter(str[1]);
+        const pos2 = forceLetter(str[2]);
+        const pos3 = forceNumber(str[3]);
+        const pos6 = forceNumber(str[6]);
+
+        const char4 = str[4];
+        const char5 = str[5];
+
+        const isNum = (c: string) => /[0-9]/.test(c) || ['O', 'Q', 'D', 'I', 'L', 'J', 'T', 'Z', 'S', 'B'].includes(c);
+        const isLet = (c: string) => /[A-Z]/.test(c) || ['0', '1', '2', '5', '8'].includes(c);
+
+        const scoreTraditional = (isNum(char4) ? 1 : 0) + (isNum(char5) ? 1 : 0);
+        const scoreMercosulCar = (isLet(char4) ? 1 : 0) + (isNum(char5) ? 1 : 0);
+        const scoreMercosulMoto = (isNum(char4) ? 1 : 0) + (isLet(char5) ? 1 : 0);
+
+        const maxScore = Math.max(scoreTraditional, scoreMercosulCar, scoreMercosulMoto);
+
+        let pos4 = char4;
+        let pos5 = char5;
+
+        if (maxScore === scoreTraditional) {
+          pos4 = forceNumber(char4);
+          pos5 = forceNumber(char5);
+        } else if (maxScore === scoreMercosulCar) {
+          pos4 = forceLetter(char4);
+          pos5 = forceNumber(char5);
+        } else {
+          pos4 = forceNumber(char4);
+          pos5 = forceLetter(char5);
+        }
+
+        return `${pos0}${pos1}${pos2}${pos3}${pos4}${pos5}${pos6}`;
+      };
+
+      const allText = result.blocks.map(b => b.text).join(" ");
+      const candidates = getCandidates(allText);
       
-      const allText = result.blocks.map(b => b.text).join(" ").replace(/[^a-zA-Z0-9]/g, "");
-      
+      const scoredCandidates = candidates
+        .map(c => ({ raw: c, score: scoreCandidate(c) }))
+        .filter(x => x.score >= 7) // limite mínimo para ser considerado candidato
+        .sort((a, b) => b.score - a.score);
+
       let placaEncontrada = "";
-      const matches = allText.match(/[a-zA-Z]{3}[0-9][A-Za-z0-9][0-9]{2}/g);
-      
-      if (matches && matches.length > 0) {
-        placaEncontrada = matches[0].toUpperCase();
-      } else if (allText.length >= 7) {
-        placaEncontrada = allText.substring(0, 7).toUpperCase();
+      let veiculo = null;
+
+      // Primeiro tentamos achar um veículo no banco comparando as placas corrigidas
+      for (const item of scoredCandidates) {
+        const corrected = correctPlate(item.raw);
+        const found = await findVeiculoByPlaca(corrected);
+        if (found) {
+          placaEncontrada = corrected;
+          veiculo = found;
+          break;
+        }
+      }
+
+      // Se nenhum veículo do banco coincidir, pegamos a melhor placa candidata corrigida
+      if (!placaEncontrada && scoredCandidates.length > 0) {
+        placaEncontrada = correctPlate(scoredCandidates[0].raw);
       }
 
       if (!placaEncontrada) {
@@ -527,7 +636,10 @@ export default function App() {
         return;
       }
 
-      const veiculo = await findVeiculoByPlaca(placaEncontrada);
+      if (!veiculo) {
+        veiculo = await findVeiculoByPlaca(placaEncontrada);
+      }
+
       if (!veiculo) {
         playFeedbackSound(false);
         Alert.alert("Bloqueado", `Placa ${placaEncontrada} não encontrada no cadastro de veículos.`);
