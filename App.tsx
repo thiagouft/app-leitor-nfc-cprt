@@ -677,6 +677,71 @@ export default function App() {
         return `${pos0}${pos1}${pos2}${pos3}${pos4}${pos5}${pos6}`;
       };
 
+      // Função para gerar possíveis variantes da placa com base em padrões comuns de confusão do OCR
+      const generatePlateVariants = (str: string): string[] => {
+        if (str.length !== 7) return [];
+        str = str.toUpperCase();
+
+        const getLetterOptions = (char: string): string[] => {
+          if (['O', 'D', 'Q', '0'].includes(char)) return ['O', 'D', 'Q'];
+          if (['I', 'L', 'J', 'T', '1'].includes(char)) return ['I', 'L', 'J', 'T'];
+          if (['Z', '2'].includes(char)) return ['Z'];
+          if (['S', '5'].includes(char)) return ['S'];
+          if (['B', '8'].includes(char)) return ['B'];
+          if (['G', '6'].includes(char)) return ['G'];
+          if (['A', '4'].includes(char)) return ['A'];
+          return [char];
+        };
+
+        const getNumberOptions = (char: string): string[] => {
+          if (['0', 'O', 'D', 'Q'].includes(char)) return ['0'];
+          if (['1', 'I', 'L', 'J', 'T'].includes(char)) return ['1'];
+          if (['2', 'Z'].includes(char)) return ['2'];
+          if (['5', 'S'].includes(char)) return ['5'];
+          if (['8', 'B'].includes(char)) return ['8'];
+          if (['6', 'G'].includes(char)) return ['6'];
+          if (['4', 'A'].includes(char)) return ['4'];
+          return [char];
+        };
+
+        const pos0Opts = getLetterOptions(str[0]);
+        const pos1Opts = getLetterOptions(str[1]);
+        const pos2Opts = getLetterOptions(str[2]);
+        const pos3Opts = getNumberOptions(str[3]);
+        const pos6Opts = getNumberOptions(str[6]);
+
+        const formats = [
+          { p4Letter: false, p5Letter: false }, // Tradicional (AAA1234)
+          { p4Letter: true, p5Letter: false },  // Mercosul Carro (AAA1A23)
+          { p4Letter: false, p5Letter: true },  // Mercosul Moto (AAA12A3)
+        ];
+
+        const variantsSet = new Set<string>();
+
+        for (const fmt of formats) {
+          const pos4Opts = fmt.p4Letter ? getLetterOptions(str[4]) : getNumberOptions(str[4]);
+          const pos5Opts = fmt.p5Letter ? getLetterOptions(str[5]) : getNumberOptions(str[5]);
+
+          for (const p0 of pos0Opts) {
+            for (const p1 of pos1Opts) {
+              for (const p2 of pos2Opts) {
+                for (const p3 of pos3Opts) {
+                  for (const p4 of pos4Opts) {
+                    for (const p5 of pos5Opts) {
+                      for (const p6 of pos6Opts) {
+                        variantsSet.add(`${p0}${p1}${p2}${p3}${p4}${p5}${p6}`);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        return Array.from(variantsSet);
+      };
+
       const allText = result.blocks.map(b => b.text).join(" ");
       const candidates = getCandidates(allText);
       
@@ -688,15 +753,19 @@ export default function App() {
       let placaEncontrada = "";
       let veiculo = null;
 
-      // Primeiro tentamos achar um veículo no banco comparando as placas corrigidas
+      // Primeiro tentamos achar um veículo no banco comparando as placas corrigidas e suas variantes
       for (const item of scoredCandidates) {
-        const corrected = correctPlate(item.raw);
-        const found = await findVeiculoByPlaca(corrected);
-        if (found) {
-          placaEncontrada = corrected;
-          veiculo = found;
-          break;
+        const variants = generatePlateVariants(item.raw);
+        let found = null;
+        for (const variant of variants) {
+          found = await findVeiculoByPlaca(variant);
+          if (found) {
+            placaEncontrada = variant;
+            veiculo = found;
+            break;
+          }
         }
+        if (veiculo) break;
       }
 
       // Se nenhum veículo do banco coincidir, pegamos a melhor placa candidata corrigida
