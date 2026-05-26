@@ -1426,7 +1426,7 @@ export default function App() {
 
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
                     <TouchableOpacity
-                      style={[styles.button, { flex: 2, marginRight: 5, backgroundColor: "#3269D9" }]}
+                      style={[styles.button, { flex: 1, marginRight: 5, backgroundColor: "#3269D9" }]}
                       onPress={capturarPlaca}
                       disabled={loading}
                     >
@@ -1609,7 +1609,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: "center",
   },
-  buttonText: { color: "#FFF", fontWeight: "bold", fontSize: 16 },
+  buttonText: { color: "#FFF", fontWeight: "bold", fontSize: 16, textAlign: "center" },
   passwordRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1686,7 +1686,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#333",
   },
-  pulseText: { color: "#36BF8D", fontSize: 18, fontWeight: "bold" },
+  pulseText: { color: "#36BF8D", fontSize: 18, fontWeight: "bold", textAlign: "center" },
   pulseSubText: {
     color: "#aaa",
     fontSize: 12,
