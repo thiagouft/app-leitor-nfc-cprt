@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
+import * as ImageManipulator from "expo-image-manipulator";
 import NfcManager, { NfcEvents } from "react-native-nfc-manager";
 import { apiFetch, getApiUrl, setApiUrl, setToken } from "./src/api";
 import {
@@ -102,6 +103,11 @@ export default function App() {
     setModoPassageiros(val);
   };
   const [sentidoVeiculo, setSentidoVeiculo] = useState<"ENTRADA" | "SAIDA">("ENTRADA");
+  const [zoom, setZoom] = useState(0);
+  const [mostrarBuscaManual, setMostrarBuscaManual] = useState(false);
+  const [placaInput, setPlacaInput] = useState("");
+  const [cameraLayout, setCameraLayout] = useState<{ width: number; height: number } | null>(null);
+
 
   const refreshPendingLeituras = async () => {
     try {
@@ -191,19 +197,6 @@ export default function App() {
           shouldDuckAndroid: true,
           playThroughEarpieceAndroid: false,
         });
-
-        const { sound: successSound } = await ExpoAudio.Sound.createAsync(
-          require("./assets/sounds/allowed.wav"),
-        );
-        const { sound: errorSound } = await ExpoAudio.Sound.createAsync(
-          require("./assets/sounds/blocked.wav"),
-        );
-
-        await successSound.setVolumeAsync(1.0);
-        await errorSound.setVolumeAsync(1.0);
-
-        soundRefs.current.success = successSound;
-        soundRefs.current.error = errorSound;
       } catch (e) {
         console.warn("Audio load erro:", e);
       }
@@ -214,8 +207,6 @@ export default function App() {
 
     return () => {
       NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
-      soundRefs.current.success?.unloadAsync();
-      soundRefs.current.error?.unloadAsync();
     };
   }, []);
 
@@ -455,31 +446,39 @@ export default function App() {
   };
 
   const playFeedbackSound = async (allowed: boolean) => {
-    const sound = allowed ? soundRefs.current.success : soundRefs.current.error;
-    if (!sound) return;
-    try {
-      const status = await sound.getStatusAsync();
-      if (
-        typeof status === "object" &&
-        "isPlaying" in status &&
-        status.isPlaying
-      ) {
-        await sound.stopAsync();
+    // Pequeno delay de 350ms para permitir que o sistema operacional Android finalize a liberação dos recursos
+    // de hardware e foco de áudio da câmera (shutter sound) antes de abrirmos a nossa sessão de áudio.
+    setTimeout(async () => {
+      try {
+        // Força a redefinição do modo de áudio do Expo para resgatar o foco de áudio do sistema
+        await ExpoAudio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          allowsRecordingIOS: false,
+          staysActiveInBackground: true,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false,
+        });
+
+        const soundFile = allowed 
+          ? require("./assets/sounds/allowed.wav") 
+          : require("./assets/sounds/blocked.wav");
+
+        // Cria a instância do som diretamente e a executa
+        const { sound } = await ExpoAudio.Sound.createAsync(
+          soundFile,
+          { shouldPlay: true, volume: 1.0 }
+        );
+
+        // Descarrega o som da memória quando terminar de tocar para liberar recursos
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            sound.unloadAsync().catch((err) => console.log("Erro ao descarregar som:", err));
+          }
+        });
+      } catch (e) {
+        console.warn("Erro ao reproduzir som de feedback:", e);
       }
-      await sound.setPositionAsync(0);
-      
-      // Pequeno delay para garantir que o sistema Android devolva o foco de áudio
-      // após usar a Câmera ou após o serviço de NFC do sistema atuar.
-      setTimeout(async () => {
-        try {
-          await sound.playAsync();
-        } catch (e) {
-          console.log("Ignored audio focus error on retry:", e);
-        }
-      }, 150);
-    } catch (e) {
-      console.warn("Sound play error:", e);
-    }
+    }, 350);
   };
 
   const startReadingMode = async () => {
@@ -579,109 +578,96 @@ export default function App() {
     if (!cameraRef.current) return;
     try {
       setLoading(true);
-      const photo = await cameraRef.current.takePictureAsync({ base64: false });
-      const result = await TextRecognition.recognize(photo.uri);
-      
-      // Função para extrair candidatos de 7 caracteres a partir do texto
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 1,
+        base64: false,
+        skipMetadata: false,
+      });
+
+      // Funções locais de processamento de texto
       const getCandidates = (text: string): string[] => {
-        const cleaned = text.replace(/[^a-zA-Z0-9]/g, "");
         const candidates: string[] = [];
-        for (let i = 0; i <= cleaned.length - 7; i++) {
-          candidates.push(cleaned.substring(i, i + 7));
+        const words = text.toUpperCase().split(/[\s\n\r]+/);
+        const forbidden = ["MERCO", "COSUL", "BRASIL", "BRASI", "ERCOS", "ESUL", "VELOC", "ELOCI", "CONTRO"];
+        const isForbidden = (str: string) => {
+          return forbidden.some(f => str.includes(f));
+        };
+        
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i];
+          const cleaned = word.replace(/[^A-Z0-9]/g, "");
+          if (cleaned.length >= 7) {
+            for (let j = 0; j <= cleaned.length - 7; j++) {
+              const candidate = cleaned.substring(j, j + 7);
+              if (!isForbidden(candidate)) {
+                candidates.push(candidate);
+              }
+            }
+          }
         }
+        
+        for (let i = 0; i < words.length - 1; i++) {
+          const wordA = words[i].replace(/[^A-Z0-9]/g, "");
+          const wordB = words[i + 1].replace(/[^A-Z0-9]/g, "");
+          if (wordA.length + wordB.length === 7) {
+            if ((wordA.length === 3 && wordB.length === 4) || (wordA.length === 4 && wordB.length === 3)) {
+              const candidate = wordA + wordB;
+              if (!isForbidden(candidate)) {
+                candidates.push(candidate);
+              }
+            }
+          }
+        }
+        
         return candidates;
       };
 
-      // Função para pontuar o quão parecido um candidato é com uma placa brasileira
       const scoreCandidate = (str: string): number => {
         if (str.length !== 7) return -1;
         let score = 0;
-        
-        // Posições 1, 2, 3 (letras)
         for (let i = 0; i < 3; i++) {
-          if (/[a-zA-Z]/.test(str[i])) score += 2;
-          else if (/[01258]/.test(str[i])) score += 1; // números frequentemente confundidos
+          if (/[A-Z]/i.test(str[i])) score += 2;
+          else if (/[01258]/.test(str[i])) score += 1;
         }
-        
-        // Posição 4 (número)
         if (/[0-9]/.test(str[3])) score += 2;
-        else if (/[OQDLJTzSbB]/i.test(str[3])) score += 1; // letras frequentemente confundidas
-        
-        // Posição 7 (número)
-        if (/[0-9]/.test(str[6])) score += 2;
-        else if (/[OQDLJTzSbB]/i.test(str[6])) score += 1; // letras frequentemente confundidas
-
-        // Posições 5 e 6 (estruturas possíveis: Letra/Número, Número/Letra, Número/Número)
-        const c4 = str[4];
-        const c5 = str[5];
-        const isNum = (c: string) => /[0-9]/.test(c) || /[OQDLJTzSbB]/i.test(c);
-        const isLet = (c: string) => /[a-zA-Z]/.test(c) || /[01258]/.test(c);
-        
-        const matchTraditional = isNum(c4) && isNum(c5);
-        const matchMercosulCar = isLet(c4) && isNum(c5);
-        const matchMercosulMoto = isNum(c4) && isLet(c5);
-
-        if (matchTraditional || matchMercosulCar || matchMercosulMoto) {
-          score += 3;
+        else if (/[OQDLJTzSbB]/i.test(str[3])) score += 1;
+        if (/[A-Z]/i.test(str[4])) score += 2;
+        else if (/[01258]/.test(str[4])) score += 1;
+        for (let i = 5; i < 7; i++) {
+          if (/[0-9]/.test(str[i])) score += 2;
+          else if (/[OQDLJTzSbB]/i.test(str[i])) score += 1;
         }
-
+        const isLet = (c: string) => /[A-Z]/i.test(c);
+        const isNum = (c: string) => /[0-9]/.test(c);
+        if (isLet(str[0]) && isLet(str[1]) && isLet(str[2]) && isNum(str[3]) && isLet(str[4]) && isNum(str[5]) && isNum(str[6])) {
+          score += 10;
+        }
         return score;
       };
 
-      // Função para corrigir a placa baseado em padrões de confusão de OCR (ex: O vs 0, I vs 1)
       const correctPlate = (str: string): string => {
         str = str.toUpperCase();
-        
         const forceLetter = (char: string) => {
           const map: { [key: string]: string } = { '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B' };
           return map[char] || char;
         };
-
         const forceNumber = (char: string) => {
           const map: { [key: string]: string } = { 'O': '0', 'Q': '0', 'D': '0', 'I': '1', 'L': '1', 'J': '1', 'T': '1', 'Z': '2', 'S': '5', 'B': '8' };
           return map[char] || char;
         };
-
         const pos0 = forceLetter(str[0]);
         const pos1 = forceLetter(str[1]);
         const pos2 = forceLetter(str[2]);
         const pos3 = forceNumber(str[3]);
+        const pos4 = forceLetter(str[4]);
+        const pos5 = forceNumber(str[5]);
         const pos6 = forceNumber(str[6]);
-
-        const char4 = str[4];
-        const char5 = str[5];
-
-        const isNum = (c: string) => /[0-9]/.test(c) || ['O', 'Q', 'D', 'I', 'L', 'J', 'T', 'Z', 'S', 'B'].includes(c);
-        const isLet = (c: string) => /[A-Z]/.test(c) || ['0', '1', '2', '5', '8'].includes(c);
-
-        const scoreTraditional = (isNum(char4) ? 1 : 0) + (isNum(char5) ? 1 : 0);
-        const scoreMercosulCar = (isLet(char4) ? 1 : 0) + (isNum(char5) ? 1 : 0);
-        const scoreMercosulMoto = (isNum(char4) ? 1 : 0) + (isLet(char5) ? 1 : 0);
-
-        const maxScore = Math.max(scoreTraditional, scoreMercosulCar, scoreMercosulMoto);
-
-        let pos4 = char4;
-        let pos5 = char5;
-
-        if (maxScore === scoreTraditional) {
-          pos4 = forceNumber(char4);
-          pos5 = forceNumber(char5);
-        } else if (maxScore === scoreMercosulCar) {
-          pos4 = forceLetter(char4);
-          pos5 = forceNumber(char5);
-        } else {
-          pos4 = forceNumber(char4);
-          pos5 = forceLetter(char5);
-        }
-
         return `${pos0}${pos1}${pos2}${pos3}${pos4}${pos5}${pos6}`;
       };
 
-      // Função para gerar possíveis variantes da placa com base em padrões comuns de confusão do OCR
       const generatePlateVariants = (str: string): string[] => {
         if (str.length !== 7) return [];
         str = str.toUpperCase();
-
         const getLetterOptions = (char: string): string[] => {
           if (['O', 'D', 'Q', '0'].includes(char)) return ['O', 'D', 'Q'];
           if (['I', 'L', 'J', 'T', '1'].includes(char)) return ['I', 'L', 'J', 'T'];
@@ -690,9 +676,9 @@ export default function App() {
           if (['B', '8'].includes(char)) return ['B'];
           if (['G', '6'].includes(char)) return ['G'];
           if (['A', '4'].includes(char)) return ['A'];
+          if (['W', 'H', 'M', 'N', 'V', 'U', 'Y'].includes(char)) return ['W', 'H', 'M', 'N', 'V', 'U', 'Y'];
           return [char];
         };
-
         const getNumberOptions = (char: string): string[] => {
           if (['0', 'O', 'D', 'Q'].includes(char)) return ['0'];
           if (['1', 'I', 'L', 'J', 'T'].includes(char)) return ['1'];
@@ -703,34 +689,22 @@ export default function App() {
           if (['4', 'A'].includes(char)) return ['4'];
           return [char];
         };
-
         const pos0Opts = getLetterOptions(str[0]);
         const pos1Opts = getLetterOptions(str[1]);
         const pos2Opts = getLetterOptions(str[2]);
         const pos3Opts = getNumberOptions(str[3]);
         const pos6Opts = getNumberOptions(str[6]);
-
-        const formats = [
-          { p4Letter: false, p5Letter: false }, // Tradicional (AAA1234)
-          { p4Letter: true, p5Letter: false },  // Mercosul Carro (AAA1A23)
-          { p4Letter: false, p5Letter: true },  // Mercosul Moto (AAA12A3)
-        ];
-
+        const pos4Opts = getLetterOptions(str[4]);
+        const pos5Opts = getNumberOptions(str[5]);
         const variantsSet = new Set<string>();
-
-        for (const fmt of formats) {
-          const pos4Opts = fmt.p4Letter ? getLetterOptions(str[4]) : getNumberOptions(str[4]);
-          const pos5Opts = fmt.p5Letter ? getLetterOptions(str[5]) : getNumberOptions(str[5]);
-
-          for (const p0 of pos0Opts) {
-            for (const p1 of pos1Opts) {
-              for (const p2 of pos2Opts) {
-                for (const p3 of pos3Opts) {
-                  for (const p4 of pos4Opts) {
-                    for (const p5 of pos5Opts) {
-                      for (const p6 of pos6Opts) {
-                        variantsSet.add(`${p0}${p1}${p2}${p3}${p4}${p5}${p6}`);
-                      }
+        for (const p0 of pos0Opts) {
+          for (const p1 of pos1Opts) {
+            for (const p2 of pos2Opts) {
+              for (const p3 of pos3Opts) {
+                for (const p4 of pos4Opts) {
+                  for (const p5 of pos5Opts) {
+                    for (const p6 of pos6Opts) {
+                      variantsSet.add(`${p0}${p1}${p2}${p3}${p4}${p5}${p6}`);
                     }
                   }
                 }
@@ -738,24 +712,141 @@ export default function App() {
             }
           }
         }
-
         return Array.from(variantsSet);
       };
 
-      const allText = result.blocks.map(b => b.text).join(" ");
-      const candidates = getCandidates(allText);
-      
-      const scoredCandidates = candidates
-        .map(c => ({ raw: c, score: scoreCandidate(c) }))
-        .filter(x => x.score >= 7) // limite mínimo para ser considerado candidato
-        .sort((a, b) => b.score - a.score);
+      const isValidMercosulCar = (str: string): boolean => {
+        if (str.length !== 7) return false;
+        const isLet = (c: string) => /[A-Z]/.test(c);
+        const isNum = (c: string) => /[0-9]/.test(c);
+        return isLet(str[0]) && isLet(str[1]) && isLet(str[2]) && isNum(str[3]) && isLet(str[4]) && isNum(str[5]) && isNum(str[6]);
+      };
+
+      let scoredCandidates: any[] = [];
+
+      // TENTATIVA 1: Processamento da região recortada e redimensionada da placa
+      try {
+        let originX = photo.width * 0.14;
+        let originY = photo.height * 0.38;
+        let cropWidth = photo.width * 0.72;
+        let cropHeight = photo.height * 0.15;
+
+        if (cameraLayout) {
+          const lw = cameraLayout.width;
+          const lh = cameraLayout.height;
+          const pw = photo.width;
+          const ph = photo.height;
+
+          const rLayout = lw / lh;
+          const rPhoto = pw / ph;
+
+          let scale = 1;
+          let xOffset = 0;
+          let yOffset = 0;
+
+          if (rLayout > rPhoto) {
+            // Layout é mais largo que a foto (Cover corta topo/fundo)
+            scale = lw / pw;
+            yOffset = (ph * scale - lh) / 2;
+          } else {
+            // Layout é mais alto que a foto (Cover corta laterais)
+            scale = lh / ph;
+            xOffset = (pw * scale - lw) / 2;
+          }
+
+          // Posição visual do retângulo verde na tela (layout)
+          const boxWidthLayout = 280;
+          const boxHeightLayout = 110;
+          const boxXLayout = (lw - boxWidthLayout) / 2;
+          const boxYLayout = (lh - boxHeightLayout) * (1 / 2.8);
+
+          // Mapeamento para coordenadas da foto real
+          const mappedX = (boxXLayout + xOffset) / scale;
+          const mappedY = (boxYLayout + yOffset) / scale;
+          const mappedW = boxWidthLayout / scale;
+          const mappedH = boxHeightLayout / scale;
+
+          // Limita as coordenadas para não estourarem as dimensões da foto
+          originX = Math.max(0, Math.min(pw - 10, mappedX));
+          originY = Math.max(0, Math.min(ph - 10, mappedY));
+          cropWidth = Math.max(10, Math.min(pw - originX, mappedW));
+          cropHeight = Math.max(10, Math.min(ph - originY, mappedH));
+
+          console.log(`[Crop preciso] Mapeado: X=${originX.toFixed(0)}, Y=${originY.toFixed(0)}, W=${cropWidth.toFixed(0)}, H=${cropHeight.toFixed(0)} | Foto: ${pw}x${ph} | Layout: ${lw}x${lh}`);
+        }
+
+        const manipulatedPhoto = await ImageManipulator.manipulateAsync(
+          photo.uri,
+          [
+            {
+              crop: {
+                originX: Math.round(originX),
+                originY: Math.round(originY),
+                width: Math.round(cropWidth),
+                height: Math.round(cropHeight),
+              },
+            },
+            {
+              resize: {
+                width: 800,
+              },
+            },
+          ],
+          {
+            compress: 1,
+            format: ImageManipulator.SaveFormat.JPEG,
+          }
+        );
+
+        const result = await TextRecognition.recognize(manipulatedPhoto.uri);
+        const allText = result.blocks.map(b => b.text).join(" ");
+        const candidates = getCandidates(allText);
+        
+        scoredCandidates = candidates
+          .map(c => {
+            const corrected = correctPlate(c);
+            return { raw: c, corrected, score: scoreCandidate(corrected) };
+          })
+          .filter(x => isValidMercosulCar(x.corrected) && x.score >= 14)
+          .sort((a, b) => b.score - a.score);
+      } catch (cropErr) {
+        console.warn("Erro no processamento do recorte, tentando imagem cheia:", cropErr);
+      }
+
+      // TENTATIVA 2 (FALLBACK): Se o recorte falhar ou não encontrar candidatos válidos, processamos a imagem completa
+      if (scoredCandidates.length === 0) {
+        try {
+          console.log("Nenhuma placa detectada no recorte. Rodando OCR na imagem completa...");
+          
+          // Opcional: Redimensiona a foto cheia ligeiramente para otimizar velocidade do OCR do ML Kit
+          const fullResized = await ImageManipulator.manipulateAsync(
+            photo.uri,
+            [{ resize: { width: 1200 } }],
+            { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
+          );
+
+          const resultFull = await TextRecognition.recognize(fullResized.uri);
+          const allTextFull = resultFull.blocks.map(b => b.text).join(" ");
+          const candidatesFull = getCandidates(allTextFull);
+          
+          scoredCandidates = candidatesFull
+            .map(c => {
+              const corrected = correctPlate(c);
+              return { raw: c, corrected, score: scoreCandidate(corrected) };
+            })
+            .filter(x => isValidMercosulCar(x.corrected) && x.score >= 14)
+            .sort((a, b) => b.score - a.score);
+        } catch (fullErr) {
+          console.warn("Erro no processamento da imagem completa:", fullErr);
+        }
+      }
 
       let placaEncontrada = "";
       let veiculo = null;
 
       // Primeiro tentamos achar um veículo no banco comparando as placas corrigidas e suas variantes
       for (const item of scoredCandidates) {
-        const variants = generatePlateVariants(item.raw);
+        const variants = generatePlateVariants(item.corrected);
         let found = null;
         for (const variant of variants) {
           found = await findVeiculoByPlaca(variant);
@@ -770,7 +861,7 @@ export default function App() {
 
       // Se nenhum veículo do banco coincidir, pegamos a melhor placa candidata corrigida
       if (!placaEncontrada && scoredCandidates.length > 0) {
-        placaEncontrada = correctPlate(scoredCandidates[0].raw);
+        placaEncontrada = scoredCandidates[0].corrected;
       }
 
       if (!placaEncontrada) {
@@ -872,7 +963,114 @@ export default function App() {
     setAguardandoNfcCondutor(false);
     setModoPassageirosSync(false);
     setLastRead(null);
+    setZoom(0);
+    setMostrarBuscaManual(false);
+    setPlacaInput("");
+    
+    // Força a restauração do modo de áudio ao sair da tela de câmera para garantir que o som do Modo 2 seja restaurado
+    ExpoAudio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      allowsRecordingIOS: false,
+      staysActiveInBackground: true,
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: false,
+    }).catch(err => console.log("Erro ao resetar modo de áudio:", err));
+
     setCurrentScreen("DASHBOARD");
+  };
+
+  const buscarPlacaManualmente = async () => {
+    if (!placaInput || placaInput.trim().length < 7) {
+      Alert.alert("Aviso", "Por favor, digite uma placa válida com 7 caracteres.");
+      return;
+    }
+
+    const placaNormalizada = placaInput.trim().toUpperCase();
+    setLoading(true);
+    try {
+      const veiculo = await findVeiculoByPlaca(placaNormalizada);
+      if (!veiculo) {
+        playFeedbackSound(false);
+        Alert.alert("Bloqueado", `Placa ${placaNormalizada} não encontrada no cadastro de veículos.`);
+        setLoading(false);
+        return;
+      }
+
+      setPlacaLida(veiculo);
+      setAguardandoNfcCondutor(true);
+      setMostrarBuscaManual(false);
+      setPlacaInput("");
+      playFeedbackSound(true);
+
+      NfcManager.setEventListener(NfcEvents.DiscoverTag, async (tag: any) => {
+        try {
+          const now = Date.now();
+          if (now - lastReadTimeRef.current < 1000) return;
+          lastReadTimeRef.current = now;
+
+          let tagSignature = "";
+          if (tag.id) {
+            if (Array.isArray(tag.id) || tag.id instanceof Uint8Array) {
+              tagSignature = bytesToHex(tag.id as any);
+            } else if (typeof tag.id === "string") {
+              tagSignature = tag.id.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+            }
+          }
+
+          const reversedHex = reverseHex(tagSignature);
+          const reversedDec = hexToDec(reversedHex);
+
+          const pessoa = await findPessoaByCredencial(reversedDec);
+          const situacaoCode = pessoa ? pessoa.situacao : 0;
+          const nome = pessoa ? pessoa.nome : "Não Cadastrado";
+          const matricula = pessoa ? pessoa.matricula : "-";
+
+          const uuid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+          const idCelular = Device.osBuildId || "CELULAR_DESCONHECIDO";
+
+          const isCondutorVal = !modoPassageirosRef.current ? 1 : 0;
+
+          await saveLeituraVeiculo(
+            uuid,
+            veiculo.placa,
+            matricula,
+            nome,
+            reversedDec,
+            selectedPortaria.id,
+            sentidoVeiculo,
+            new Date().toISOString(),
+            idCelular,
+            situacaoCode,
+            isCondutorVal
+          );
+
+          playFeedbackSound(situacaoCode === 1);
+          await refreshPendingLeituras();
+
+          const wasCondutor = !modoPassageirosRef.current;
+          setLastRead({
+            situacao: situacaoCode,
+            nome: nome,
+            matricula: matricula,
+            credencial: reversedDec,
+            is_condutor: wasCondutor
+          });
+          if (wasCondutor) {
+            setModoPassageirosSync(true);
+          }
+        } catch (err: any) {
+          playFeedbackSound(false);
+          Alert.alert("Erro ao ler cartão", err.message);
+        }
+      });
+
+      await NfcManager.registerTagEvent();
+
+    } catch (e: any) {
+      Alert.alert("Erro ao buscar veículo", e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!isDbReady) {
@@ -1158,14 +1356,59 @@ export default function App() {
             </Text>
           </View>
 
-          <View style={{ flex: 1, backgroundColor: "#000", overflow: "hidden" }}>
+          <View style={{ flex: 1, backgroundColor: "#000", overflow: "hidden", position: 'relative' }}>
             {!aguardandoNfcCondutor ? (
               <CameraView 
                 style={{ flex: 1 }} 
                 facing="back" 
                 ref={cameraRef}
+                zoom={zoom}
+                mute={true}
+                onLayout={(event) => {
+                  const { width, height } = event.nativeEvent.layout;
+                  setCameraLayout({ width, height });
+                }}
               >
+                {/* Visual Guide Rectangle Overlay */}
+                <View style={styles.overlayGuideContainer} pointerEvents="none">
+                  <View style={styles.overlayTop} />
+                  <View style={styles.overlayMiddleRow}>
+                    <View style={styles.overlaySide} />
+                    <View style={styles.overlayFocusArea}>
+                      <View style={[styles.corner, styles.topLeftCorner]} />
+                      <View style={[styles.corner, styles.topRightCorner]} />
+                      <View style={[styles.corner, styles.bottomLeftCorner]} />
+                      <View style={[styles.corner, styles.bottomRightCorner]} />
+                      <Text style={styles.overlayGuideText}>ALINHE A PLACA AQUI</Text>
+                    </View>
+                    <View style={styles.overlaySide} />
+                  </View>
+                  <View style={styles.overlayBottom} />
+                </View>
+
                 <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'flex-end', padding: 20 }}>
+                  {/* Zoom Controls */}
+                  <View style={styles.zoomContainer}>
+                    <TouchableOpacity 
+                      style={[styles.zoomButton, zoom === 0 && styles.zoomButtonActive]} 
+                      onPress={() => setZoom(0)}
+                    >
+                      <Text style={[styles.zoomText, zoom === 0 && styles.zoomTextActive]}>1x</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.zoomButton, zoom === 0.15 && styles.zoomButtonActive]} 
+                      onPress={() => setZoom(0.15)}
+                    >
+                      <Text style={[styles.zoomText, zoom === 0.15 && styles.zoomTextActive]}>1.5x</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.zoomButton, zoom === 0.3 && styles.zoomButtonActive]} 
+                      onPress={() => setZoom(0.3)}
+                    >
+                      <Text style={[styles.zoomText, zoom === 0.3 && styles.zoomTextActive]}>2x</Text>
+                    </TouchableOpacity>
+                  </View>
+
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
                     <TouchableOpacity
                       style={[styles.button, { flex: 1, marginRight: 5, backgroundColor: sentidoVeiculo === "ENTRADA" ? "#217346" : "rgba(33, 115, 70, 0.4)" }]}
@@ -1180,13 +1423,26 @@ export default function App() {
                       <Text style={styles.buttonText}>SAÍDA</Text>
                     </TouchableOpacity>
                   </View>
-                  <TouchableOpacity
-                    style={[styles.button, { backgroundColor: "#3269D9", marginBottom: 15 }]}
-                    onPress={capturarPlaca}
-                    disabled={loading}
-                  >
-                    {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>Capturar Placa</Text>}
-                  </TouchableOpacity>
+
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+                    <TouchableOpacity
+                      style={[styles.button, { flex: 2, marginRight: 5, backgroundColor: "#3269D9" }]}
+                      onPress={capturarPlaca}
+                      disabled={loading}
+                    >
+                      {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>Capturar Placa</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.button, { flex: 1, marginLeft: 5, backgroundColor: "#F39C12" }]}
+                      onPress={() => {
+                        setPlacaInput("");
+                        setMostrarBuscaManual(true);
+                      }}
+                      disabled={loading}
+                    >
+                      <Text style={styles.buttonText}>Digitar Placa</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </CameraView>
             ) : (
@@ -1228,15 +1484,15 @@ export default function App() {
                       </Text>
                       <Text style={styles.resultLabel}>Nome:</Text>
                       <Text style={[styles.resultValue, {fontSize: 16}]}>{lastRead.nome}</Text>
-
+ 
                       <Text style={styles.resultLabel}>Matrícula:</Text>
                       <Text style={[styles.resultValue, {fontSize: 16}]}>{lastRead.matricula}</Text>
-
+ 
                       <Text style={styles.resultLabel}>Credencial:</Text>
                       <Text style={[styles.resultValue, {fontSize: 16}]}>{lastRead.credencial}</Text>
                     </View>
                   )}
-
+ 
                   {!lastRead && <ActivityIndicator size="large" color="#3269D9" style={{marginTop: 15}} />}
                 </View>
                 {modoPassageiros && (
@@ -1253,6 +1509,49 @@ export default function App() {
                     <Text style={styles.buttonText}>Finalizar Veículo e Ler Nova Placa</Text>
                   </TouchableOpacity>
                 )}
+              </View>
+            )}
+
+            {/* Manual Search Modal/Card Overlay */}
+            {mostrarBuscaManual && (
+              <View style={styles.manualSearchOverlay}>
+                <View style={styles.manualSearchCard}>
+                  <Text style={styles.manualSearchTitle}>Consulta Manual de Placa</Text>
+                  <Text style={styles.manualSearchSubtitle}>
+                    Digite a placa do veículo para fazer a verificação e liberação
+                  </Text>
+
+                  <TextInput
+                    style={styles.manualSearchInput}
+                    value={placaInput}
+                    onChangeText={(txt) => setPlacaInput(txt.toUpperCase())}
+                    autoCapitalize="characters"
+                    maxLength={7}
+                    placeholder="AAA9A99"
+                    placeholderTextColor="#888"
+                    autoCorrect={false}
+                    autoFocus
+                  />
+
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <TouchableOpacity
+                      style={[styles.button, { flex: 1, marginRight: 5, backgroundColor: "rgba(231, 76, 60, 0.15)", borderWidth: 1, borderColor: "#E74C3C" }]}
+                      onPress={() => {
+                        setMostrarBuscaManual(false);
+                        setPlacaInput("");
+                      }}
+                    >
+                      <Text style={[styles.buttonText, { color: "#E74C3C" }]}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.button, { flex: 1, marginLeft: 5, backgroundColor: "#36BF8D" }]}
+                      onPress={buscarPlacaManualmente}
+                      disabled={loading}
+                    >
+                      {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>Buscar</Text>}
+                    </TouchableOpacity>
+                  </View>
+                </View>
               </View>
             )}
           </View>
@@ -1417,4 +1716,154 @@ const styles = StyleSheet.create({
   },
   resultLabel: { fontSize: 12, color: "#666", marginTop: 10 },
   resultValue: { fontSize: 18, color: "#141926", fontWeight: "bold" },
+  zoomContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 15,
+  },
+  zoomButton: {
+    backgroundColor: 'rgba(20, 25, 38, 0.85)',
+    borderWidth: 1,
+    borderColor: '#444',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    marginHorizontal: 8,
+    minWidth: 55,
+    alignItems: 'center',
+  },
+  zoomButtonActive: {
+    backgroundColor: '#3269D9',
+    borderColor: '#3269D9',
+  },
+  zoomText: {
+    color: '#bbb',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  zoomTextActive: {
+    color: '#FFF',
+  },
+  overlayGuideContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'space-between',
+  },
+  overlayTop: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 25, 38, 0.6)',
+  },
+  overlayMiddleRow: {
+    height: 110,
+    flexDirection: 'row',
+  },
+  overlaySide: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 25, 38, 0.6)',
+  },
+  overlayFocusArea: {
+    width: 280,
+    height: 110,
+    borderWidth: 1.5,
+    borderColor: '#36BF8D',
+    borderRadius: 8,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  overlayBottom: {
+    flex: 1.8,
+    backgroundColor: 'rgba(20, 25, 38, 0.6)',
+  },
+  corner: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderColor: '#36BF8D',
+  },
+  topLeftCorner: {
+    top: -2,
+    left: -2,
+    borderTopWidth: 4,
+    borderLeftWidth: 4,
+  },
+  topRightCorner: {
+    top: -2,
+    right: -2,
+    borderTopWidth: 4,
+    borderRightWidth: 4,
+  },
+  bottomLeftCorner: {
+    bottom: -2,
+    left: -2,
+    borderBottomWidth: 4,
+    borderLeftWidth: 4,
+  },
+  bottomRightCorner: {
+    bottom: -2,
+    right: -2,
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+  },
+  overlayGuideText: {
+    color: '#36BF8D',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+    backgroundColor: 'rgba(20, 25, 38, 0.85)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  manualSearchOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(20, 25, 38, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  manualSearchCard: {
+    backgroundColor: '#F2F2F2',
+    padding: 20,
+    borderRadius: 12,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#CCC',
+    elevation: 5,
+  },
+  manualSearchTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#141926',
+    textAlign: 'center',
+    marginBottom: 5,
+  },
+  manualSearchSubtitle: {
+    fontSize: 13,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  manualSearchInput: {
+    backgroundColor: '#FFF',
+    borderWidth: 1,
+    borderColor: '#CCC',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#141926',
+    textAlign: 'center',
+    marginBottom: 20,
+    letterSpacing: 3,
+  },
 });
