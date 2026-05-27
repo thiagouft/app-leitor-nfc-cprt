@@ -2,7 +2,8 @@ import * as SecureStore from 'expo-secure-store';
 
 export async function getApiUrl() {
   const url = await SecureStore.getItemAsync('api_url');
-  return url || 'http://192.168.1.14:3000/api';
+  return url || 'https://app.mixestec.com.br/api';
+  //return url || 'http://192.168.1.14:3000/api';
 }
 
 export async function setApiUrl(url: string) {
@@ -20,7 +21,7 @@ export async function setToken(token: string) {
 export async function apiFetch(endpoint: string, options: any = {}) {
   const baseUrl = await getApiUrl();
   const token = await getToken();
-  
+
   const headers: any = {
     'Content-Type': 'application/json',
     ...(options.headers || {})
