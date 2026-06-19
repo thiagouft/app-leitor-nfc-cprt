@@ -16,7 +16,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as ImageManipulator from "expo-image-manipulator";
 import NfcManager, { NfcEvents } from "react-native-nfc-manager";
-import { apiFetch, getApiUrl, setApiUrl, setToken } from "./src/api";
+import { apiFetch, getApiUrl, setApiUrl, setToken, onSessionExpired } from "./src/api";
 import {
     clearPessoas,
     findPessoaByCredencial,
@@ -74,6 +74,49 @@ export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
   const [hasNfc, setHasNfc] = useState<boolean | null>(null);
   const [currentScreen, setCurrentScreen] = useState<Screen>("LOGIN");
+
+  const isSessionExpiredAlertShowingRef = useRef(false);
+
+  const handleSessionExpired = async () => {
+    if (isSessionExpiredAlertShowingRef.current) return;
+    isSessionExpiredAlertShowingRef.current = true;
+
+    try {
+      await setToken("");
+      await SecureStore.deleteItemAsync("selected_portaria");
+      setSelectedPortaria(null);
+      setLogin("");
+      setSenha("");
+      setCurrentScreen("LOGIN");
+
+      Alert.alert(
+        "Sessão Expirada",
+        "Sua sessão expirou por inatividade. Por favor, faça login novamente.",
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              isSessionExpiredAlertShowingRef.current = false;
+            },
+          },
+        ],
+        { cancelable: false }
+      );
+    } catch (e) {
+      isSessionExpiredAlertShowingRef.current = false;
+    }
+  };
+
+  const handleSessionExpiredRef = useRef(handleSessionExpired);
+  useEffect(() => {
+    handleSessionExpiredRef.current = handleSessionExpired;
+  });
+
+  useEffect(() => {
+    onSessionExpired(() => {
+      handleSessionExpiredRef.current();
+    });
+  }, []);
 
   const [url, setUrl] = useState("");
   const [login, setLogin] = useState("");
@@ -297,6 +340,7 @@ export default function App() {
       setPortarias(ports);
       setCurrentScreen("PORTARIA");
     } catch (err: any) {
+      if (err.message === "SESSION_EXPIRED") return;
       Alert.alert("Erro no Login", err.message);
     } finally {
       setLoading(false);
@@ -339,6 +383,7 @@ export default function App() {
         `Cadastros atualizados (API -> Celular).\nPessoas: ${pessoas.length}\nVeículos: ${veiculos.length}`
       );
     } catch (err: any) {
+      if (err.message === "SESSION_EXPIRED") return;
       Alert.alert("Erro na Sincronização", err.message);
     } finally {
       setLoading(false);
@@ -421,6 +466,7 @@ export default function App() {
         Alert.alert("Sincronização", "Nenhum registro pendente para envio.");
       }
     } catch (err: any) {
+      if (err.message === "SESSION_EXPIRED") return;
       Alert.alert("Erro na Sincronização", err.message);
     } finally {
       setLoading(false);

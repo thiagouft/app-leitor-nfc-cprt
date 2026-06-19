@@ -1,9 +1,23 @@
 import * as SecureStore from 'expo-secure-store';
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+    Object.setPrototypeOf(this, ApiError.prototype);
+  }
+}
+
+let sessionExpiredCallback: (() => void) | null = null;
+
+export function onSessionExpired(callback: () => void) {
+  sessionExpiredCallback = callback;
+}
+
 export async function getApiUrl() {
   const url = await SecureStore.getItemAsync('api_url');
   return url || 'https://app.mixestec.com.br/api';
-  //return url || 'http://192.168.1.14:3000/api';
 }
 
 export async function setApiUrl(url: string) {
@@ -36,9 +50,22 @@ export async function apiFetch(endpoint: string, options: any = {}) {
     headers
   });
 
-  const data = await response.json();
+  let data: any = {};
+  try {
+    data = await response.json();
+  } catch (err) {
+    // Fallback if parsing JSON fails
+  }
+
+  if (response.status === 401 && endpoint !== '/auth/login') {
+    if (sessionExpiredCallback) {
+      sessionExpiredCallback();
+    }
+    throw new ApiError('SESSION_EXPIRED', 401);
+  }
+
   if (!response.ok) {
-    throw new Error(data.error || 'Erro na requisição da API');
+    throw new ApiError(data.error || 'Erro na requisição da API', response.status);
   }
 
   return data;
