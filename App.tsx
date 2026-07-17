@@ -1457,16 +1457,50 @@ export default function App() {
 
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
                     <TouchableOpacity
-                      style={[styles.button, { flex: 1, marginRight: 5, backgroundColor: sentidoVeiculo === "ENTRADA" ? "#217346" : "rgba(33, 115, 70, 0.4)" }]}
+                      style={[
+                        styles.button,
+                        {
+                          flex: 1,
+                          marginRight: 5,
+                          backgroundColor: sentidoVeiculo === "ENTRADA" ? "#2E7D32" : "#1C2833",
+                          borderWidth: 2.5,
+                          borderColor: sentidoVeiculo === "ENTRADA" ? "#FFFFFF" : "#1C2833",
+                        }
+                      ]}
                       onPress={() => setSentidoVeiculo("ENTRADA")}
                     >
-                      <Text style={styles.buttonText}>ENTRADA</Text>
+                      <Text style={[
+                        styles.buttonText,
+                        {
+                          color: sentidoVeiculo === "ENTRADA" ? "#FFFFFF" : "rgba(255, 255, 255, 0.5)",
+                          fontWeight: sentidoVeiculo === "ENTRADA" ? "bold" : "normal"
+                        }
+                      ]}>
+                        ENTRADA
+                      </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.button, { flex: 1, marginLeft: 5, backgroundColor: sentidoVeiculo === "SAIDA" ? "#E74C3C" : "rgba(231, 76, 60, 0.4)" }]}
+                      style={[
+                        styles.button,
+                        {
+                          flex: 1,
+                          marginLeft: 5,
+                          backgroundColor: sentidoVeiculo === "SAIDA" ? "#D32F2F" : "#1C2833",
+                          borderWidth: 2.5,
+                          borderColor: sentidoVeiculo === "SAIDA" ? "#FFFFFF" : "#1C2833",
+                        }
+                      ]}
                       onPress={() => setSentidoVeiculo("SAIDA")}
                     >
-                      <Text style={styles.buttonText}>SAÍDA</Text>
+                      <Text style={[
+                        styles.buttonText,
+                        {
+                          color: sentidoVeiculo === "SAIDA" ? "#FFFFFF" : "rgba(255, 255, 255, 0.5)",
+                          fontWeight: sentidoVeiculo === "SAIDA" ? "bold" : "normal"
+                        }
+                      ]}>
+                        SAÍDA
+                      </Text>
                     </TouchableOpacity>
                   </View>
 
