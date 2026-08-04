@@ -41,3 +41,11 @@ app-example
 # generated native folders
 /ios
 /android
+
+#Banco Sqlite
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

@@ -185,11 +185,23 @@ export default function App() {
         setUrl(savedUrl);
         const token = await SecureStore.getItemAsync("user_token");
         const pStr = await SecureStore.getItemAsync("selected_portaria");
-        if (token && pStr) {
-          setSelectedPortaria(JSON.parse(pStr));
-          setCurrentScreen("DASHBOARD");
-        } else if (pStr) {
-          setSelectedPortaria(JSON.parse(pStr));
+        if (token) {
+          apiFetch("/portarias")
+            .then((ports) => {
+              setPortarias(ports);
+            })
+            .catch((err) => {
+              console.warn("Erro ao buscar portarias em background no setup:", err);
+            });
+
+          if (pStr) {
+            setSelectedPortaria(JSON.parse(pStr));
+            setCurrentScreen("DASHBOARD");
+          } else {
+            setCurrentScreen("PORTARIA");
+          }
+        } else {
+          setCurrentScreen("LOGIN");
         }
         // Carregar última sincronização
         const lastPessoas = await SecureStore.getItemAsync("last_sync_pessoas");
@@ -1204,7 +1216,7 @@ export default function App() {
       {/* PORTARIA SCREEN */}
       {currentScreen === "PORTARIA" && (
         <ScrollView contentContainerStyle={styles.container}>
-          <Text style={styles.cardTitle}>Selecione a Portaria</Text>
+          <Text style={[styles.cardTitle, { color: "#F2F2F2" }]}>Selecione a Portaria</Text>
           {portarias.map((p, index) => (
             <TouchableOpacity
               key={index}
@@ -1319,7 +1331,23 @@ export default function App() {
           <View style={styles.dashboardFooter}>
             <TouchableOpacity
               style={styles.footerBtn}
-              onPress={() => setCurrentScreen("PORTARIA")}
+              onPress={async () => {
+                setLoading(true);
+                try {
+                  const ports = await apiFetch("/portarias");
+                  setPortarias(ports);
+                  setCurrentScreen("PORTARIA");
+                } catch (err: any) {
+                  if (err.message === "SESSION_EXPIRED") return;
+                  Alert.alert(
+                    "Erro de Conexão",
+                    "Não foi possível carregar a lista de portarias. Verifique sua conexão e tente novamente."
+                  );
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              disabled={loading}
             >
               <Text style={styles.footerBtnText}>Trocar Portaria</Text>
             </TouchableOpacity>
