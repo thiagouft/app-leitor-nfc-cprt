@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -1683,7 +1684,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#141926",
   },
-  app: { flex: 1, backgroundColor: "#141926" },
+  app: {
+    flex: 1,
+    backgroundColor: "#141926",
+    paddingBottom: Platform.OS === 'android' ? 32 : 16,
+  },
   header: {
     height: 90,
     backgroundColor: "#3269D9",
