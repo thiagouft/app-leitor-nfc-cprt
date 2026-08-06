@@ -80,23 +80,34 @@ export async function clearPessoas() {
   await db.execAsync("DELETE FROM Pessoas");
 }
 
-export async function insertPessoas(pessoas: any[]) {
+export async function insertPessoas(pessoas: any[], onProgress?: (inserted: number, total: number) => void) {
   const db = await getDB();
-  await db.withTransactionAsync(async () => {
-    for (const p of pessoas) {
-      await db.runAsync(
-        "INSERT OR REPLACE INTO Pessoas (matricula, nome, credencial, situacao) VALUES (?, ?, ?, ?)",
-        [p.matricula, p.nome, p.credenciais || "", p.situacao],
-      );
+  const chunkSize = 200;
+  const total = pessoas.length;
+  
+  for (let i = 0; i < total; i += chunkSize) {
+    const chunk = pessoas.slice(i, i + chunkSize);
+    await db.withTransactionAsync(async () => {
+      for (const p of chunk) {
+        const credStr = p.credenciais ? p.credenciais.toString().trim() : "";
+        await db.runAsync(
+          "INSERT OR REPLACE INTO Pessoas (matricula, nome, credencial, situacao) VALUES (?, ?, ?, ?)",
+          [p.matricula, p.nome, credStr, p.situacao],
+        );
+      }
+    });
+    if (onProgress) {
+      onProgress(Math.min(i + chunkSize, total), total);
     }
-  });
+  }
 }
 
 export async function findPessoaByCredencial(credencial: string) {
   const db = await getDB();
+  const trimmed = credencial.trim();
   const result = await db.getFirstAsync(
-    "SELECT * FROM Pessoas WHERE credencial = ?",
-    [credencial],
+    "SELECT * FROM Pessoas WHERE TRIM(credencial) = ? OR ',' || REPLACE(credencial, ' ', '') || ',' LIKE '%,' || ? || ',%'",
+    [trimmed, trimmed],
   );
   return result as any;
 }
@@ -143,16 +154,25 @@ export async function clearVeiculos() {
   await db.execAsync("DELETE FROM Veiculos");
 }
 
-export async function insertVeiculos(veiculos: any[]) {
+export async function insertVeiculos(veiculos: any[], onProgress?: (inserted: number, total: number) => void) {
   const db = await getDB();
-  await db.withTransactionAsync(async () => {
-    for (const v of veiculos) {
-      await db.runAsync(
-        "INSERT OR REPLACE INTO Veiculos (placa, descricao) VALUES (?, ?)",
-        [v.placa, v.descricao],
-      );
+  const chunkSize = 200;
+  const total = veiculos.length;
+  
+  for (let i = 0; i < total; i += chunkSize) {
+    const chunk = veiculos.slice(i, i + chunkSize);
+    await db.withTransactionAsync(async () => {
+      for (const v of chunk) {
+        await db.runAsync(
+          "INSERT OR REPLACE INTO Veiculos (placa, descricao) VALUES (?, ?)",
+          [v.placa, v.descricao],
+        );
+      }
+    });
+    if (onProgress) {
+      onProgress(Math.min(i + chunkSize, total), total);
     }
-  });
+  }
 }
 
 export async function findVeiculoByPlaca(placa: string) {

@@ -17,7 +17,7 @@ export function onSessionExpired(callback: () => void) {
 
 export async function getApiUrl() {
   const url = await SecureStore.getItemAsync('api_url');
-  return url || 'https://app.mixestec.com.br/api';
+  return url || 'https://teste.mixestec.com.br/api';
 }
 
 export async function setApiUrl(url: string) {

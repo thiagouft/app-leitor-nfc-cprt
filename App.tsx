@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    Modal,
     Platform,
     ScrollView,
     StyleSheet,
@@ -75,6 +76,12 @@ export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
   const [hasNfc, setHasNfc] = useState<boolean | null>(null);
   const [currentScreen, setCurrentScreen] = useState<Screen>("LOGIN");
+
+  // Sync Progress states
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [syncStatusMsg, setSyncStatusMsg] = useState("");
+  const [syncTitle, setSyncTitle] = useState("Sincronizando Cadastros");
 
   const isSessionExpiredAlertShowingRef = useRef(false);
 
@@ -370,20 +377,36 @@ export default function App() {
   };
 
   const syncDataAPItoMobile = async () => {
+    setSyncTitle("Sincronizando Cadastros");
+    setIsSyncing(true);
+    setSyncProgress(0);
+    setSyncStatusMsg("Baixando funcionários da API...");
     setLoading(true);
     try {
       // Sync Pessoas
       const pessoas = await apiFetch("/pessoas");
+      
+      setSyncStatusMsg("Gravando funcionários no banco local...");
       await clearPessoas();
-      await insertPessoas(pessoas);
+      await insertPessoas(pessoas, (inserted, total) => {
+        setSyncProgress((inserted / total) * 100);
+        setSyncStatusMsg(`Gravando funcionários: ${inserted} de ${total}`);
+      });
       const nowPessoas = new Date().toLocaleString("pt-BR");
       setLastSyncPessoas(nowPessoas);
       await SecureStore.setItemAsync("last_sync_pessoas", nowPessoas);
 
       // Sync Veiculos
+      setSyncProgress(0);
+      setSyncStatusMsg("Baixando veículos da API...");
       const veiculos = await apiFetch("/veiculos");
+      
+      setSyncStatusMsg("Gravando veículos no banco local...");
       await clearVeiculos();
-      await insertVeiculos(veiculos);
+      await insertVeiculos(veiculos, (inserted, total) => {
+        setSyncProgress((inserted / total) * 100);
+        setSyncStatusMsg(`Gravando veículos: ${inserted} de ${total}`);
+      });
       const nowVeiculos = new Date().toLocaleString("pt-BR");
       setLastSyncVeiculos(nowVeiculos);
       await SecureStore.setItemAsync("last_sync_veiculos", nowVeiculos);
@@ -391,97 +414,146 @@ export default function App() {
       // Salvar timestamp para controle de lembrete
       await SecureStore.setItemAsync("last_sync_timestamp", Date.now().toString());
 
+      setIsSyncing(false);
       Alert.alert(
         "Sucesso",
         `Cadastros atualizados (API -> Celular).\nPessoas: ${pessoas.length}\nVeículos: ${veiculos.length}`
       );
     } catch (err: any) {
+      setIsSyncing(false);
       if (err.message === "SESSION_EXPIRED") return;
       Alert.alert("Erro na Sincronização", err.message);
     } finally {
+      setIsSyncing(false);
       setLoading(false);
     }
   };
 
   const syncDataMobiletoAPI = async () => {
+    // 1. Verificar se há registros pendentes antes de abrir o modal
+    let unsyncedPessoas: any[] = [];
+    let unsyncedVeiculos: any[] = [];
+    try {
+      unsyncedPessoas = await getUnsyncedLeituras();
+      unsyncedVeiculos = await getUnsyncedLeiturasVeiculos();
+    } catch (err) {
+      console.warn("Erro ao buscar registros não sincronizados:", err);
+    }
+
+    const totalPessoas = unsyncedPessoas.length;
+    const totalVeiculos = unsyncedVeiculos.length;
+    const totalGeral = totalPessoas + totalVeiculos;
+
+    if (totalGeral === 0) {
+      Alert.alert("Sincronização", "Nenhum registro pendente para envio.");
+      return;
+    }
+
+    // 2. Iniciar o estado de sincronização (modal de progresso)
+    setSyncTitle("Enviando Leituras");
+    setIsSyncing(true);
+    setSyncProgress(0);
+    setSyncStatusMsg("Preparando envio...");
     setLoading(true);
+
     try {
       let leiturasMsg = "Nenhuma pessoa pendente.";
       let veiculosMsg = "Nenhum veículo pendente.";
-      let syncedSomething = false;
+      let registrosProcessados = 0;
+      let totalPessoasEnviadas = 0;
+      let totalVeiculosEnviados = 0;
 
-      // Sync Leituras Pessoas
-      const unsyncedPessoas = await getUnsyncedLeituras();
-      if (unsyncedPessoas.length > 0) {
-        const payloadPessoas = unsyncedPessoas.map((u) => ({
-          credencial: u.credencial,
-          id_portaria: u.id_portaria,
-          data_hora_leitura: u.data_hora_leitura,
-          id_celular: u.id_celular,
-          situacao: u.situacao,
-        }));
+      const chunkSize = 50; // tamanho do lote de envio
 
-        const resPessoas = await apiFetch("/sync", {
-          method: "POST",
-          body: JSON.stringify({ leituras: payloadPessoas }),
-        });
+      // 3. Enviar Leituras de Pessoas em chunks
+      if (totalPessoas > 0) {
+        for (let i = 0; i < totalPessoas; i += chunkSize) {
+          const chunk = unsyncedPessoas.slice(i, i + chunkSize);
+          const payloadPessoas = chunk.map((u) => ({
+            credencial: u.credencial,
+            id_portaria: u.id_portaria,
+            data_hora_leitura: u.data_hora_leitura,
+            id_celular: u.id_celular,
+            situacao: u.situacao,
+          }));
 
-        const idsPessoas = unsyncedPessoas.map((u) => u.id);
-        await markLeiturasAsSynced(idsPessoas);
-        setLeiturasPendentes(0);
+          setSyncStatusMsg(`Enviando pessoas: ${registrosProcessados + 1} a ${Math.min(registrosProcessados + chunk.length, totalPessoas)} de ${totalPessoas}...`);
 
+          const resPessoas = await apiFetch("/sync", {
+            method: "POST",
+            body: JSON.stringify({ leituras: payloadPessoas }),
+          });
+
+          const idsPessoas = chunk.map((u) => u.id);
+          await markLeiturasAsSynced(idsPessoas);
+          
+          totalPessoasEnviadas += resPessoas.count || chunk.length;
+          registrosProcessados += chunk.length;
+          setSyncProgress((registrosProcessados / totalGeral) * 100);
+        }
+        
         const now = new Date().toLocaleString("pt-BR");
         setLastSyncLeituras(now);
         await SecureStore.setItemAsync("last_sync_leituras", now);
-        leiturasMsg = `${resPessoas.count} leituras de pessoas.`;
-        syncedSomething = true;
+        leiturasMsg = `${totalPessoasEnviadas} leituras de pessoas.`;
       }
 
-      // Sync Leituras Veiculos
-      const unsyncedVeiculos = await getUnsyncedLeiturasVeiculos();
-      if (unsyncedVeiculos.length > 0) {
-        const payloadVeiculos = unsyncedVeiculos.map((u) => ({
-          id: u.id,
-          placa: u.placa,
-          matricula_condutor: u.matricula_condutor,
-          nome_condutor: u.nome_condutor,
-          credencial_condutor: u.credencial_condutor,
-          id_portaria: u.id_portaria,
-          sentido: u.sentido,
-          data_hora_leitura: u.data_hora_leitura,
-          id_celular: u.id_celular,
-          situacao: u.situacao,
-          is_condutor: u.is_condutor === 1,
-        }));
+      // 4. Enviar Leituras de Veículos em chunks
+      if (totalVeiculos > 0) {
+        for (let i = 0; i < totalVeiculos; i += chunkSize) {
+          const chunk = unsyncedVeiculos.slice(i, i + chunkSize);
+          const payloadVeiculos = chunk.map((u) => ({
+            id: u.id,
+            placa: u.placa,
+            matricula_condutor: u.matricula_condutor,
+            nome_condutor: u.nome_condutor,
+            credencial_condutor: u.credencial_condutor,
+            id_portaria: u.id_portaria,
+            sentido: u.sentido,
+            data_hora_leitura: u.data_hora_leitura,
+            id_celular: u.id_celular,
+            situacao: u.situacao,
+            is_condutor: u.is_condutor === 1,
+          }));
 
-        const resVeiculos = await apiFetch("/sync/leituras-veiculo", {
-          method: "POST",
-          body: JSON.stringify({ leituras: payloadVeiculos }),
-        });
+          setSyncStatusMsg(`Enviando veículos: ${i + 1} a ${Math.min(i + chunk.length, totalVeiculos)} de ${totalVeiculos}...`);
 
-        const idsVeiculos = unsyncedVeiculos.map((u) => u.id);
-        await markLeiturasVeiculosAsSynced(idsVeiculos);
-        setLeiturasVeiculosPendentes(0);
+          const resVeiculos = await apiFetch("/sync/leituras-veiculo", {
+            method: "POST",
+            body: JSON.stringify({ leituras: payloadVeiculos }),
+          });
+
+          const idsVeiculos = chunk.map((u) => u.id);
+          await markLeiturasVeiculosAsSynced(idsVeiculos);
+          
+          totalVeiculosEnviados += resVeiculos.count || chunk.length;
+          registrosProcessados += chunk.length;
+          setSyncProgress((registrosProcessados / totalGeral) * 100);
+        }
 
         const now = new Date().toLocaleString("pt-BR");
         setLastSyncLeiturasVeiculos(now);
         await SecureStore.setItemAsync("last_sync_leituras_veiculos", now);
-        veiculosMsg = `${resVeiculos.count} leituras de veículos.`;
-        syncedSomething = true;
+        veiculosMsg = `${totalVeiculosEnviados} leituras de veículos.`;
       }
 
-      if (syncedSomething) {
-        Alert.alert(
-          "Sucesso",
-          `Envio concluído (Celular -> API).\n\nEnviados:\n- ${leiturasMsg}\n- ${veiculosMsg}`
-        );
-      } else {
-        Alert.alert("Sincronização", "Nenhum registro pendente para envio.");
-      }
+      // 5. Atualizar contagem de leituras pendentes na tela principal
+      await refreshPendingLeituras();
+
+      // Fechar modal de sincronização
+      setIsSyncing(false);
+
+      Alert.alert(
+        "Sucesso",
+        `Envio concluído (Celular -> API).\n\nEnviados:\n- ${leiturasMsg}\n- ${veiculosMsg}`
+      );
+
     } catch (err: any) {
+      setIsSyncing(false);
       if (err.message === "SESSION_EXPIRED") return;
       Alert.alert("Erro na Sincronização", err.message);
     } finally {
+      setIsSyncing(false);
       setLoading(false);
     }
   };
@@ -1142,6 +1214,23 @@ export default function App() {
 
   return (
     <View style={styles.app}>
+      <Modal visible={isSyncing} transparent={true} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.syncProgressContainer}>
+            <Text style={styles.syncProgressTitle}>{syncTitle}</Text>
+            <ActivityIndicator size="large" color="#3269D9" style={{ marginBottom: 15 }} />
+            <Text style={styles.syncProgressStatus}>{syncStatusMsg}</Text>
+            {syncProgress > 0 && (
+              <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFg, { width: `${syncProgress}%` }]} />
+              </View>
+            )}
+            {syncProgress > 0 && (
+              <Text style={styles.syncProgressPercentage}>{Math.round(syncProgress)}%</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>CPRT Acesso</Text>
         {selectedPortaria &&
@@ -1978,5 +2067,56 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
     letterSpacing: 3,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(20, 25, 38, 0.8)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  syncProgressContainer: {
+    backgroundColor: "#F2F2F2",
+    padding: 25,
+    borderRadius: 12,
+    width: "100%",
+    alignItems: "center",
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  syncProgressTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#141926",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  syncProgressStatus: {
+    fontSize: 14,
+    color: "#444",
+    marginBottom: 15,
+    textAlign: "center",
+    fontWeight: "500",
+  },
+  progressBarBg: {
+    width: "100%",
+    height: 12,
+    backgroundColor: "#E0E0E0",
+    borderRadius: 6,
+    overflow: "hidden",
+    marginBottom: 8,
+  },
+  progressBarFg: {
+    height: "100%",
+    backgroundColor: "#3269D9",
+    borderRadius: 6,
+  },
+  syncProgressPercentage: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#3269D9",
   },
 });
