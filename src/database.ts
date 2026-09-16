@@ -163,9 +163,10 @@ export async function insertVeiculos(veiculos: any[], onProgress?: (inserted: nu
     const chunk = veiculos.slice(i, i + chunkSize);
     await db.withTransactionAsync(async () => {
       for (const v of chunk) {
+        const cleanPlaca = (v.placa || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
         await db.runAsync(
           "INSERT OR REPLACE INTO Veiculos (placa, descricao) VALUES (?, ?)",
-          [v.placa, v.descricao],
+          [cleanPlaca, v.descricao],
         );
       }
     });
@@ -177,9 +178,10 @@ export async function insertVeiculos(veiculos: any[], onProgress?: (inserted: nu
 
 export async function findVeiculoByPlaca(placa: string) {
   const db = await getDB();
+  const cleanPlaca = (placa || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
   const result = await db.getFirstAsync(
     "SELECT * FROM Veiculos WHERE placa = ?",
-    [placa],
+    [cleanPlaca],
   );
   return result as any;
 }

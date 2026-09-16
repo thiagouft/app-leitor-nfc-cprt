@@ -718,39 +718,65 @@ export default function App() {
       // Funções locais de processamento de texto
       const getCandidates = (text: string): string[] => {
         const candidates: string[] = [];
-        const words = text.toUpperCase().split(/[\s\n\r]+/);
-        const forbidden = ["MERCO", "COSUL", "BRASIL", "BRASI", "ERCOS", "ESUL", "VELOC", "ELOCI", "CONTRO"];
+        const rawWords = text.toUpperCase().split(/[\s\n\r]+/);
+        const forbidden = [
+          "MERCO", "COSUL", "BRASIL", "BRASI", "ERCOS", "ESUL",
+          "VELOC", "ELOCI", "CONTRO", "MAXIM", "MÁXIM", "PERMIT",
+          "CHEVRO", "MONTAN", "TURBO", "KMLH", "KM/H", "KMH"
+        ];
         const isForbidden = (str: string) => {
           return forbidden.some(f => str.includes(f));
         };
-        
+
+        const words = rawWords
+          .map(w => w.replace(/[^A-Z0-9]/g, ""))
+          .filter(w => w.length > 0 && !isForbidden(w));
+
+        // 1. Extração direta de palavras com 7 ou mais caracteres
         for (let i = 0; i < words.length; i++) {
           const word = words[i];
-          const cleaned = word.replace(/[^A-Z0-9]/g, "");
-          if (cleaned.length >= 7) {
-            for (let j = 0; j <= cleaned.length - 7; j++) {
-              const candidate = cleaned.substring(j, j + 7);
+          if (word.startsWith("BR") && word.length === 9) {
+            const candidate = word.substring(2);
+            if (!isForbidden(candidate)) {
+              candidates.push(candidate);
+            }
+          }
+          if (word.length >= 7) {
+            for (let j = 0; j <= word.length - 7; j++) {
+              const candidate = word.substring(j, j + 7);
               if (!isForbidden(candidate)) {
                 candidates.push(candidate);
               }
             }
           }
         }
-        
-        for (let i = 0; i < words.length - 1; i++) {
-          const wordA = words[i].replace(/[^A-Z0-9]/g, "");
-          const wordB = words[i + 1].replace(/[^A-Z0-9]/g, "");
-          if (wordA.length + wordB.length === 7) {
-            if ((wordA.length === 3 && wordB.length === 4) || (wordA.length === 4 && wordB.length === 3)) {
-              const candidate = wordA + wordB;
-              if (!isForbidden(candidate)) {
-                candidates.push(candidate);
+
+        // 2. Janela deslizante de 2 até 7 fragmentos consecutivos
+        // Permite capturar placas que o OCR dividiu em múltiplos blocos (ex: "TV", "O", "0", "F", "53")
+        for (let i = 0; i < words.length; i++) {
+          let combined = "";
+          for (let k = i; k < Math.min(i + 7, words.length); k++) {
+            combined += words[k];
+            if (combined.startsWith("BR") && combined.length === 9) {
+              const noBr = combined.substring(2);
+              if (!isForbidden(noBr)) candidates.push(noBr);
+            }
+            if (combined.length === 7) {
+              if (!isForbidden(combined)) {
+                candidates.push(combined);
+              }
+            } else if (combined.length > 7) {
+              for (let j = 0; j <= combined.length - 7; j++) {
+                const sub = combined.substring(j, j + 7);
+                if (!isForbidden(sub)) {
+                  candidates.push(sub);
+                }
               }
             }
           }
         }
-        
-        return candidates;
+
+        return Array.from(new Set(candidates));
       };
 
       const scoreCandidate = (str: string): number => {
@@ -758,17 +784,17 @@ export default function App() {
         let score = 0;
         for (let i = 0; i < 3; i++) {
           if (/[A-Z]/i.test(str[i])) score += 2;
-          else if (/[01258]/.test(str[i])) score += 1;
+          else if (/[0125874]/.test(str[i])) score += 1;
         }
         if (/[0-9]/.test(str[3])) score += 2;
-        else if (/[OQDLJTzSbB]/i.test(str[3])) score += 1;
+        else if (/[OQDLJTzSbBCG]/i.test(str[3])) score += 1;
         if (/[A-Z]/i.test(str[4])) score += 2;
-        else if (/[01258]/.test(str[4])) score += 1;
+        else if (/[0125874]/.test(str[4])) score += 1;
         for (let i = 5; i < 7; i++) {
           if (/[0-9]/.test(str[i])) score += 2;
-          else if (/[OQDLJTzSbB]/i.test(str[i])) score += 1;
+          else if (/[OQDLJTzSbBCG]/i.test(str[i])) score += 1;
         }
-        const isLet = (c: string) => /[A-Z]/i.test(c);
+        const isLet = (c: string) => /[A-Z]/.test(c);
         const isNum = (c: string) => /[0-9]/.test(c);
         if (isLet(str[0]) && isLet(str[1]) && isLet(str[2]) && isNum(str[3]) && isLet(str[4]) && isNum(str[5]) && isNum(str[6])) {
           score += 10;
@@ -779,11 +805,21 @@ export default function App() {
       const correctPlate = (str: string): string => {
         str = str.toUpperCase();
         const forceLetter = (char: string) => {
-          const map: { [key: string]: string } = { '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B' };
+          const map: { [key: string]: string } = {
+            '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B',
+            '4': 'A', '7': 'T', '6': 'G'
+          };
           return map[char] || char;
         };
         const forceNumber = (char: string) => {
-          const map: { [key: string]: string } = { 'O': '0', 'Q': '0', 'D': '0', 'I': '1', 'L': '1', 'J': '1', 'T': '1', 'Z': '2', 'S': '5', 'B': '8' };
+          const map: { [key: string]: string } = {
+            'O': '0', 'Q': '0', 'D': '0', 'C': '0', 'G': '0', 'U': '0',
+            'I': '1', 'L': '1', 'J': '1', 'T': '1',
+            'Z': '2',
+            'S': '5',
+            'B': '8',
+            'A': '4', 'H': '4'
+          };
           return map[char] || char;
         };
         const pos0 = forceLetter(str[0]);
@@ -800,33 +836,24 @@ export default function App() {
         if (str.length !== 7) return [];
         str = str.toUpperCase();
         const getLetterOptions = (char: string): string[] => {
-          if (['O', 'D', 'Q', '0'].includes(char)) return ['O', 'D', 'Q'];
-          if (['I', 'L', 'J', 'T', '1'].includes(char)) return ['I', 'L', 'J', 'T'];
-          if (['Z', '2'].includes(char)) return ['Z'];
-          if (['S', '5'].includes(char)) return ['S'];
-          if (['B', '8'].includes(char)) return ['B'];
-          if (['G', '6'].includes(char)) return ['G'];
-          if (['A', '4'].includes(char)) return ['A'];
-          if (['W', 'H', 'M', 'N', 'V', 'U', 'Y'].includes(char)) return ['W', 'H', 'M', 'N', 'V', 'U', 'Y'];
+          if (['O', 'D'].includes(char)) return ['O', 'D'];
+          if (['I', '1', 'T', '7'].includes(char)) return ['I', 'T'];
+          if (['F', 'E'].includes(char)) return ['F', 'E'];
+          if (['V', 'U'].includes(char)) return ['V', 'U'];
           return [char];
         };
         const getNumberOptions = (char: string): string[] => {
-          if (['0', 'O', 'D', 'Q'].includes(char)) return ['0'];
-          if (['1', 'I', 'L', 'J', 'T'].includes(char)) return ['1'];
-          if (['2', 'Z'].includes(char)) return ['2'];
-          if (['5', 'S'].includes(char)) return ['5'];
-          if (['8', 'B'].includes(char)) return ['8'];
-          if (['6', 'G'].includes(char)) return ['6'];
-          if (['4', 'A'].includes(char)) return ['4'];
+          if (['0', '6'].includes(char)) return ['0', '6'];
+          if (['8', '3', '0'].includes(char)) return ['8', '3', '0'];
           return [char];
         };
         const pos0Opts = getLetterOptions(str[0]);
         const pos1Opts = getLetterOptions(str[1]);
         const pos2Opts = getLetterOptions(str[2]);
         const pos3Opts = getNumberOptions(str[3]);
-        const pos6Opts = getNumberOptions(str[6]);
         const pos4Opts = getLetterOptions(str[4]);
         const pos5Opts = getNumberOptions(str[5]);
+        const pos6Opts = getNumberOptions(str[6]);
         const variantsSet = new Set<string>();
         for (const p0 of pos0Opts) {
           for (const p1 of pos1Opts) {
