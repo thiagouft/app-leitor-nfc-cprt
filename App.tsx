@@ -32,7 +32,10 @@ import {
     findVeiculoByPlaca,
     saveLeituraVeiculo,
     getUnsyncedLeiturasVeiculos,
-    markLeiturasVeiculosAsSynced
+    markLeiturasVeiculosAsSynced,
+    saveLeituraRefeicao,
+    getUnsyncedLeiturasRefeicoes,
+    markLeiturasRefeicoesAsSynced
 } from "./src/database";
 
 // Paleta fornecida:
@@ -70,7 +73,7 @@ function hexToDec(hex: string) {
   }
 }
 
-type Screen = "LOGIN" | "PORTARIA" | "DASHBOARD" | "READING" | "CAMERA_PLACA";
+type Screen = "LOGIN" | "PORTARIA" | "DASHBOARD" | "READING" | "CAMERA_PLACA" | "DASHBOARD_REFEICAO" | "READING_REFEICAO" | "REFEITORIO";
 
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
@@ -92,7 +95,13 @@ export default function App() {
     try {
       await setToken("");
       await SecureStore.deleteItemAsync("selected_portaria");
+      await SecureStore.deleteItemAsync("user_perfil");
+      await SecureStore.deleteItemAsync("selected_refeitorio");
+      await SecureStore.deleteItemAsync("user_refeitorios");
+      setUserPerfil(null);
       setSelectedPortaria(null);
+      setSelectedRefeitorio(null);
+      setRefeitorios([]);
       setLogin("");
       setSenha("");
       setCurrentScreen("LOGIN");
@@ -134,6 +143,8 @@ export default function App() {
 
   const [portarias, setPortarias] = useState<any[]>([]);
   const [selectedPortaria, setSelectedPortaria] = useState<any>(null);
+  const [refeitorios, setRefeitorios] = useState<any[]>([]);
+  const [selectedRefeitorio, setSelectedRefeitorio] = useState<any>(null);
 
   // Sync info
   const [lastSyncPessoas, setLastSyncPessoas] = useState<string | null>(null);
@@ -142,6 +153,10 @@ export default function App() {
   const [leiturasVeiculosPendentes, setLeiturasVeiculosPendentes] = useState<number>(0);
   const [lastSyncVeiculos, setLastSyncVeiculos] = useState<string | null>(null);
   const [lastSyncLeiturasVeiculos, setLastSyncLeiturasVeiculos] = useState<string | null>(null);
+  const [userPerfil, setUserPerfil] = useState<string | null>(null);
+  const [lastSyncRefeicoes, setLastSyncRefeicoes] = useState<string | null>(null);
+  const [leiturasRefeicoesPendentes, setLeiturasRefeicoesPendentes] = useState<number>(0);
+  const [refeicoesSessaoCount, setRefeicoesSessaoCount] = useState<number>(0);
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
@@ -166,6 +181,8 @@ export default function App() {
       setLeiturasPendentes(unsynced.length);
       const unsyncedV = await getUnsyncedLeiturasVeiculos();
       setLeiturasVeiculosPendentes(unsyncedV.length);
+      const unsyncedR = await getUnsyncedLeiturasRefeicoes();
+      setLeiturasRefeicoesPendentes(unsyncedR.length);
     } catch (e) {
       console.warn("Erro ao carregar leituras pendentes:", e);
     }
@@ -192,21 +209,45 @@ export default function App() {
         const savedUrl = await getApiUrl();
         setUrl(savedUrl);
         const token = await SecureStore.getItemAsync("user_token");
+        const savedPerfil = await SecureStore.getItemAsync("user_perfil");
+        if (savedPerfil) setUserPerfil(savedPerfil);
         const pStr = await SecureStore.getItemAsync("selected_portaria");
-        if (token) {
-          apiFetch("/portarias")
-            .then((ports) => {
-              setPortarias(ports);
-            })
-            .catch((err) => {
-              console.warn("Erro ao buscar portarias em background no setup:", err);
-            });
+        const refStr = await SecureStore.getItemAsync("selected_refeitorio");
+        const userRefsStr = await SecureStore.getItemAsync("user_refeitorios");
 
-          if (pStr) {
-            setSelectedPortaria(JSON.parse(pStr));
-            setCurrentScreen("DASHBOARD");
+        if (userRefsStr) {
+          try {
+            setRefeitorios(JSON.parse(userRefsStr));
+          } catch (e) {}
+        }
+        if (refStr) {
+          try {
+            setSelectedRefeitorio(JSON.parse(refStr));
+          } catch (e) {}
+        }
+
+        if (token) {
+          if (savedPerfil === "REFEICAO" || savedPerfil === "REFEICAO_MULTI") {
+            if (refStr) {
+              setCurrentScreen("DASHBOARD_REFEICAO");
+            } else {
+              setCurrentScreen("REFEITORIO");
+            }
           } else {
-            setCurrentScreen("PORTARIA");
+            apiFetch("/portarias")
+              .then((ports) => {
+                setPortarias(ports);
+              })
+              .catch((err) => {
+                console.warn("Erro ao buscar portarias em background no setup:", err);
+              });
+
+            if (pStr) {
+              setSelectedPortaria(JSON.parse(pStr));
+              setCurrentScreen("DASHBOARD");
+            } else {
+              setCurrentScreen("PORTARIA");
+            }
           }
         } else {
           setCurrentScreen("LOGIN");
@@ -222,6 +263,9 @@ export default function App() {
 
         const lastLeiturasVeic = await SecureStore.getItemAsync("last_sync_leituras_veiculos");
         if (lastLeiturasVeic) setLastSyncLeiturasVeiculos(lastLeiturasVeic);
+
+        const lastRefeic = await SecureStore.getItemAsync("last_sync_refeicoes");
+        if (lastRefeic) setLastSyncRefeicoes(lastRefeic);
 
         await refreshPendingLeituras();
       } catch (err) {
@@ -347,15 +391,44 @@ export default function App() {
         body: JSON.stringify({ login, senha }),
       });
 
-      if (res.usuario.perfil !== "MOBILE" && res.usuario.perfil !== "MASTER") {
+      const perfisValidos = ["MOBILE", "MASTER", "REFEICAO", "REFEICAO_MULTI"];
+      if (!perfisValidos.includes(res.usuario.perfil)) {
         Alert.alert("Erro", "Perfil sem acesso mobile.");
         setLoading(false);
         return;
       }
 
       await setToken(res.token);
+      await SecureStore.setItemAsync("user_perfil", res.usuario.perfil);
+      setUserPerfil(res.usuario.perfil);
 
-      // Get Portarias
+      if (res.usuario.perfil === "REFEICAO" || res.usuario.perfil === "REFEICAO_MULTI") {
+        const refs = res.refeitorios || [];
+        setRefeitorios(refs);
+        await SecureStore.setItemAsync("user_refeitorios", JSON.stringify(refs));
+
+        if (refs.length === 0) {
+          Alert.alert(
+            "Aviso",
+            "Nenhum refeitório autorizado para este usuário. Solicite ao administrador MASTER a vinculação do seu refeitório."
+          );
+          setLoading(false);
+          return;
+        }
+
+        if (res.usuario.perfil === "REFEICAO" || refs.length === 1) {
+          const autoRef = refs[0];
+          await SecureStore.setItemAsync("selected_refeitorio", JSON.stringify(autoRef));
+          setSelectedRefeitorio(autoRef);
+          setCurrentScreen("DASHBOARD_REFEICAO");
+        } else {
+          // REFEICAO_MULTI ou múltiplos autorizados: tela de seleção de refeitório
+          setCurrentScreen("REFEITORIO");
+        }
+        return;
+      }
+
+      // Get Portarias (MOBILE / MASTER)
       const ports = await apiFetch("/portarias");
       setPortarias(ports);
       setCurrentScreen("PORTARIA");
@@ -365,6 +438,15 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const selectRefeitorio = async (ref: any) => {
+    await SecureStore.setItemAsync(
+      "selected_refeitorio",
+      JSON.stringify(ref),
+    );
+    setSelectedRefeitorio(ref);
+    setCurrentScreen("DASHBOARD_REFEICAO");
   };
 
   const selectPortaria = async (portaria: any) => {
@@ -567,7 +649,13 @@ export default function App() {
         onPress: async () => {
           await setToken("");
           await SecureStore.deleteItemAsync("selected_portaria");
+          await SecureStore.deleteItemAsync("user_perfil");
+          await SecureStore.deleteItemAsync("selected_refeitorio");
+          await SecureStore.deleteItemAsync("user_refeitorios");
+          setUserPerfil(null);
           setSelectedPortaria(null);
+          setSelectedRefeitorio(null);
+          setRefeitorios([]);
           setCurrentScreen("LOGIN");
           setLogin("");
           setSenha("");
@@ -703,6 +791,177 @@ export default function App() {
     NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
     NfcManager.unregisterTagEvent().catch(() => {});
     setCurrentScreen("DASHBOARD");
+  };
+
+  const startReadingModeRefeicao = async () => {
+    if (hasNfc === null) {
+      Alert.alert(
+        "Aguarde",
+        "Verificando o NFC. Por favor, tente novamente em alguns segundos.",
+      );
+      return;
+    }
+
+    if (!hasNfc) {
+      Alert.alert("Erro", "NFC não suportado ou desativado neste dispositivo.");
+      return;
+    }
+
+    setLastRead(null);
+    setRefeicoesSessaoCount(0);
+    setCurrentScreen("READING_REFEICAO");
+
+    NfcManager.setEventListener(NfcEvents.DiscoverTag, async (tag: any) => {
+      const now = Date.now();
+      let tagSignature = "";
+      if (tag.id) {
+        if (Array.isArray(tag.id) || tag.id instanceof Uint8Array) {
+          tagSignature = bytesToHex(tag.id as any);
+        } else if (typeof tag.id === "string") {
+          tagSignature = tag.id.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+        }
+      }
+
+      if (tagSignature && tagSignature === lastTagIdRef.current) {
+        if (now - lastReadTimeRef.current < 800) return;
+      } else if (now - lastReadTimeRef.current < 400) {
+        return;
+      }
+
+      lastReadTimeRef.current = now;
+      lastTagIdRef.current = tagSignature;
+
+      let hex = "";
+      if (tagSignature) {
+        hex = tagSignature;
+      }
+
+      const reversedHex = reverseHex(hex);
+      const reversedDec = hexToDec(reversedHex);
+
+      // Buscar colaborador na base local SQLite
+      const pessoa = await findPessoaByCredencial(reversedDec);
+
+      const situacaoCode = pessoa ? pessoa.situacao : 0;
+      const nome = pessoa ? pessoa.nome : "Não Cadastrado";
+      const matricula = pessoa ? pessoa.matricula : "-";
+
+      const readData = {
+        credencial: reversedDec,
+        nome,
+        matricula,
+        situacao: situacaoCode,
+        data_hora: new Date().toISOString(),
+      };
+
+      setLastRead(readData);
+      setRefeicoesSessaoCount((prev) => prev + 1);
+
+      // Salvar no SQLite local na tabela LeiturasRefeicoes
+      const uuid =
+        Math.random().toString(36).substring(2, 15) +
+        Math.random().toString(36).substring(2, 15);
+      const idCelular = Device.osBuildId || "CELULAR_DESCONHECIDO";
+
+      await saveLeituraRefeicao(
+        uuid,
+        reversedDec,
+        matricula,
+        nome,
+        readData.data_hora,
+        idCelular,
+        situacaoCode,
+        selectedRefeitorio?.id || null,
+      );
+      await refreshPendingLeituras();
+      playFeedbackSound(situacaoCode === 1);
+    });
+
+    try {
+      await NfcManager.registerTagEvent();
+    } catch (e) {
+      console.warn("registerTagEvent err", e);
+    }
+  };
+
+  const stopReadingModeRefeicao = () => {
+    NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
+    NfcManager.unregisterTagEvent().catch(() => {});
+    setCurrentScreen("DASHBOARD_REFEICAO");
+  };
+
+  const syncDataRefeicoesToAPI = async () => {
+    let unsyncedRefeicoes: any[] = [];
+    try {
+      unsyncedRefeicoes = await getUnsyncedLeiturasRefeicoes();
+    } catch (err) {
+      console.warn("Erro ao buscar registros de refeições não sincronizados:", err);
+    }
+
+    const total = unsyncedRefeicoes.length;
+    if (total === 0) {
+      Alert.alert("Sincronização", "Nenhum registro de refeição pendente para envio.");
+      return;
+    }
+
+    setSyncTitle("Enviando Refeições");
+    setIsSyncing(true);
+    setSyncProgress(0);
+    setSyncStatusMsg("Preparando envio de refeições...");
+    setLoading(true);
+
+    try {
+      let totalEnviadas = 0;
+      let registrosProcessados = 0;
+      const chunkSize = 50;
+
+      for (let i = 0; i < total; i += chunkSize) {
+        const chunk = unsyncedRefeicoes.slice(i, i + chunkSize);
+        const payload = chunk.map((u) => ({
+          id: u.id,
+          credencial: u.credencial,
+          matricula: u.matricula,
+          nome: u.nome,
+          data_hora_leitura: u.data_hora_leitura,
+          id_celular: u.id_celular,
+          situacao: u.situacao,
+          id_refeitorio: u.id_refeitorio || selectedRefeitorio?.id || null,
+        }));
+
+        setSyncStatusMsg(`Enviando entregas: ${i + 1} a ${Math.min(i + chunk.length, total)} de ${total}...`);
+
+        const res = await apiFetch("/sync/leituras-refeicao", {
+          method: "POST",
+          body: JSON.stringify({ leituras: payload }),
+        });
+
+        const ids = chunk.map((u) => u.id);
+        await markLeiturasRefeicoesAsSynced(ids);
+
+        totalEnviadas += res.count || chunk.length;
+        registrosProcessados += chunk.length;
+        setSyncProgress((registrosProcessados / total) * 100);
+      }
+
+      const now = new Date().toLocaleString("pt-BR");
+      setLastSyncRefeicoes(now);
+      await SecureStore.setItemAsync("last_sync_refeicoes", now);
+
+      await refreshPendingLeituras();
+      setIsSyncing(false);
+
+      Alert.alert(
+        "Sucesso",
+        `Envio de refeições concluído com sucesso.\nTotal enviado: ${totalEnviadas} entregas.`
+      );
+    } catch (err: any) {
+      setIsSyncing(false);
+      if (err.message === "SESSION_EXPIRED") return;
+      Alert.alert("Erro no Envio de Refeições", err.message);
+    } finally {
+      setIsSyncing(false);
+      setLoading(false);
+    }
   };
 
   const capturarPlaca = async () => {
@@ -1262,9 +1521,18 @@ export default function App() {
         <Text style={styles.headerTitle}>CPRT Acesso</Text>
         {selectedPortaria &&
           currentScreen !== "LOGIN" &&
-          currentScreen !== "PORTARIA" && (
+          currentScreen !== "PORTARIA" &&
+          currentScreen !== "REFEITORIO" &&
+          currentScreen !== "DASHBOARD_REFEICAO" &&
+          currentScreen !== "READING_REFEICAO" && (
             <Text style={styles.headerSubtitle}>
               Portaria: {selectedPortaria.descricao}
+            </Text>
+          )}
+        {selectedRefeitorio &&
+          (currentScreen === "DASHBOARD_REFEICAO" || currentScreen === "READING_REFEICAO") && (
+            <Text style={styles.headerSubtitle}>
+              Refeitório: {selectedRefeitorio.descricao}
             </Text>
           )}
       </View>
@@ -1343,6 +1611,39 @@ export default function App() {
               <Text style={styles.portariaText}>{p.descricao}</Text>
             </TouchableOpacity>
           ))}
+        </ScrollView>
+      )}
+
+      {/* REFEITORIO SCREEN */}
+      {currentScreen === "REFEITORIO" && (
+        <ScrollView contentContainerStyle={styles.container}>
+          <Text style={[styles.cardTitle, { color: "#F2F2F2" }]}>Selecione o Refeitório</Text>
+          <Text style={{ color: "#aaa", fontSize: 13, textAlign: "center", marginBottom: 20 }}>
+            Escolha o local onde as entregas de marmitas serão registradas:
+          </Text>
+          {refeitorios.map((r, index) => {
+            const isSelected = selectedRefeitorio?.id === r.id;
+            return (
+              <TouchableOpacity
+                key={index}
+                style={[
+                  styles.portariaCard,
+                  isSelected && { borderColor: "#36BF8D", borderWidth: 2 }
+                ]}
+                onPress={() => selectRefeitorio(r)}
+              >
+                <Text style={[styles.portariaText, isSelected && { color: "#36BF8D" }]}>
+                  🍽️ {r.descricao} {isSelected ? "✓" : ""}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+          <TouchableOpacity
+            style={[styles.button, { backgroundColor: "#E74C3C", marginTop: 25 }]}
+            onPress={handleLogout}
+          >
+            <Text style={styles.buttonText}>Sair (Logout)</Text>
+          </TouchableOpacity>
         </ScrollView>
       )}
 
@@ -1531,6 +1832,172 @@ export default function App() {
             onPress={stopReadingMode}
           >
             <Text style={styles.buttonText}>Sair do Modo Leitura</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* DASHBOARD REFEICAO */}
+      {currentScreen === "DASHBOARD_REFEICAO" && (
+        <ScrollView contentContainerStyle={styles.container}>
+          {/* Card do Refeitório Selecionado */}
+          <View style={[styles.syncInfoCard, { borderColor: "#3269D9", borderWidth: 2, backgroundColor: "#1c2438" }]}>
+            <Text style={[styles.syncInfoTitle, { color: "#93c5fd", marginBottom: 4 }]}>
+              Refeitório em Operação
+            </Text>
+            <Text style={{ fontSize: 18, color: "#FFFFFF", fontWeight: "bold", marginBottom: 6 }}>
+              🍽️ {selectedRefeitorio?.descricao || "Nenhum refeitório selecionado"}
+            </Text>
+            {(userPerfil === "REFEICAO_MULTI" || userPerfil === "MASTER" || refeitorios.length > 1) && (
+              <TouchableOpacity
+                style={{
+                  backgroundColor: "#3269D9",
+                  paddingVertical: 7,
+                  paddingHorizontal: 12,
+                  borderRadius: 6,
+                  alignSelf: "flex-start",
+                  marginTop: 6
+                }}
+                onPress={() => setCurrentScreen("REFEITORIO")}
+              >
+                <Text style={{ color: "#FFF", fontSize: 13, fontWeight: "bold" }}>
+                  🔄 Trocar Refeitório
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <View style={styles.syncInfoCard}>
+            <Text style={styles.syncInfoTitle}>
+              Controle de Refeições (Marmitas)
+            </Text>
+            <Text style={styles.syncInfoText}>
+              Funcionários (API→Celular): {lastSyncPessoas || "Nunca sincronizado"}
+            </Text>
+            <Text style={styles.syncInfoText}>
+              Entregas Enviadas (Celular→API): {lastSyncRefeicoes || "Nunca sincronizado"}
+            </Text>
+            <Text style={styles.syncInfoText}>
+              Entregas Pendentes: {leiturasRefeicoesPendentes}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.dashboardBtn, { backgroundColor: "#36BF8D" }]}
+            onPress={syncDataAPItoMobile}
+            disabled={loading}
+          >
+            <Text style={styles.dashboardBtnText}>
+              1. Baixar Cadastros (API {"->"} Celular)
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.dashboardBtn,
+              { backgroundColor: "#3269D9", marginTop: 20 },
+            ]}
+            onPress={startReadingModeRefeicao}
+            disabled={loading || hasNfc === null}
+          >
+            <Text style={styles.dashboardBtnText}>
+              2. Modo Leitura de Marmitas
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.dashboardBtn,
+              { backgroundColor: "#F39C12", marginTop: 20 },
+            ]}
+            onPress={syncDataRefeicoesToAPI}
+            disabled={loading}
+          >
+            <Text style={styles.dashboardBtnText}>
+              3. Enviar Entregas (Celular {"->"} API)
+            </Text>
+          </TouchableOpacity>
+
+          {loading && (
+            <ActivityIndicator
+              size="large"
+              color="#3269D9"
+              style={{ marginTop: 20 }}
+            />
+          )}
+
+          <View style={styles.dashboardFooter}>
+            <TouchableOpacity
+              style={[styles.footerBtn, { backgroundColor: "#E74C3C", flex: 1 }]}
+              onPress={handleLogout}
+            >
+              <Text style={styles.footerBtnText}>Sair (Logout)</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      )}
+
+      {/* READING REFEICAO SCREEN */}
+      {currentScreen === "READING_REFEICAO" && (
+        <View style={styles.readingContainer}>
+          <View style={styles.readingTop}>
+            <Text style={styles.pulseText}>Entrega de Marmitas</Text>
+            {selectedRefeitorio && (
+              <Text style={{ color: "#93c5fd", fontSize: 15, fontWeight: "bold", marginTop: 4 }}>
+                🍽️ {selectedRefeitorio.descricao}
+              </Text>
+            )}
+            <Text style={styles.pulseSubText}>
+              Aproxime o cartão do colaborador. Modo contínuo ativo.
+            </Text>
+            {refeicoesSessaoCount > 0 && (
+              <Text style={{ color: "#36BF8D", fontSize: 15, fontWeight: "bold", marginTop: 6 }}>
+                Cartões lidos nesta sessão: {refeicoesSessaoCount}
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.resultArea}>
+            {lastRead ? (
+              <View
+                style={[
+                  styles.resultCard,
+                  {
+                    borderColor:
+                      lastRead.situacao === 1 ? "#36BF8D" : "#E74C3C",
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.resultStatus,
+                    { color: lastRead.situacao === 1 ? "#36BF8D" : "#E74C3C" },
+                  ]}
+                >
+                  {lastRead.situacao === 1
+                    ? "REFEIÇÃO AUTORIZADA"
+                    : "ACESSO BLOQUEADO"}
+                </Text>
+                <Text style={styles.resultLabel}>Nome:</Text>
+                <Text style={styles.resultValue}>{lastRead.nome}</Text>
+
+                <Text style={styles.resultLabel}>Matrícula:</Text>
+                <Text style={styles.resultValue}>{lastRead.matricula}</Text>
+
+                <Text style={styles.resultLabel}>Credencial (R-DEC):</Text>
+                <Text style={styles.resultValue}>{lastRead.credencial}</Text>
+              </View>
+            ) : (
+              <Text style={{ color: "#aaa", fontSize: 16 }}>
+                Nenhum cartão lido ainda.
+              </Text>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.button, { backgroundColor: "#E74C3C", margin: 20 }]}
+            onPress={stopReadingModeRefeicao}
+          >
+            <Text style={styles.buttonText}>Finalizar Leitura</Text>
           </TouchableOpacity>
         </View>
       )}

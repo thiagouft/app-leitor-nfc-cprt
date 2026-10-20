@@ -48,7 +48,24 @@ export async function initDB() {
       situacao INTEGER,
       sincronizado INTEGER DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS LeiturasRefeicoes (
+      id TEXT PRIMARY KEY,
+      credencial TEXT,
+      matricula TEXT,
+      nome TEXT,
+      data_hora_leitura TEXT,
+      id_celular TEXT,
+      situacao INTEGER,
+      id_refeitorio INTEGER,
+      sincronizado INTEGER DEFAULT 0
+    );
   `);
+
+  try {
+    await db.execAsync(`ALTER TABLE LeiturasRefeicoes ADD COLUMN id_refeitorio INTEGER;`);
+  } catch (e) {
+    // Ignora se a coluna já existir
+  }
 
   try {
     await db.execAsync(`ALTER TABLE LeiturasVeiculos ADD COLUMN credencial_condutor TEXT;`);
@@ -225,3 +242,43 @@ export async function markLeiturasVeiculosAsSynced(ids: string[]) {
     }
   });
 }
+
+// Refeicoes Sync & Queries
+
+export async function saveLeituraRefeicao(
+  id: string,
+  credencial: string,
+  matricula: string,
+  nome: string,
+  data_hora: string,
+  id_celular: string,
+  situacao: number,
+  id_refeitorio?: number | null,
+) {
+  const db = await getDB();
+  await db.runAsync(
+    "INSERT INTO LeiturasRefeicoes (id, credencial, matricula, nome, data_hora_leitura, id_celular, situacao, id_refeitorio, sincronizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+    [id, credencial, matricula, nome, data_hora, id_celular, situacao, id_refeitorio !== undefined ? id_refeitorio : null],
+  );
+}
+
+export async function getUnsyncedLeiturasRefeicoes() {
+  const db = await getDB();
+  const results = await db.getAllAsync(
+    "SELECT * FROM LeiturasRefeicoes WHERE sincronizado = 0",
+  );
+  return results as any[];
+}
+
+export async function markLeiturasRefeicoesAsSynced(ids: string[]) {
+  if (ids.length === 0) return;
+  const db = await getDB();
+  await db.withTransactionAsync(async () => {
+    for (const id of ids) {
+      await db.runAsync("UPDATE LeiturasRefeicoes SET sincronizado = 1 WHERE id = ?", [
+        id,
+      ]);
+    }
+  });
+}
+
