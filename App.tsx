@@ -585,17 +585,17 @@ export default function App() {
         for (let i = 0; i < totalVeiculos; i += chunkSize) {
           const chunk = unsyncedVeiculos.slice(i, i + chunkSize);
           const payloadVeiculos = chunk.map((u) => ({
-            id: u.id,
-            placa: u.placa,
-            matricula_condutor: u.matricula_condutor,
-            nome_condutor: u.nome_condutor,
-            credencial_condutor: u.credencial_condutor,
-            id_portaria: u.id_portaria,
-            sentido: u.sentido,
-            data_hora_leitura: u.data_hora_leitura,
-            id_celular: u.id_celular,
-            situacao: u.situacao,
-            is_condutor: u.is_condutor === 1,
+            id: u.id || (Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)),
+            placa: u.placa ? String(u.placa).trim().toUpperCase() : "",
+            matricula_condutor: u.matricula_condutor ? String(u.matricula_condutor).trim() : "-",
+            nome_condutor: u.nome_condutor ? String(u.nome_condutor).trim() : "Não Cadastrado",
+            credencial_condutor: u.credencial_condutor ? String(u.credencial_condutor).trim() : null,
+            id_portaria: u.id_portaria ? parseInt(u.id_portaria) : (selectedPortaria?.id ? parseInt(selectedPortaria.id) : null),
+            sentido: u.sentido || "ENTRADA",
+            data_hora_leitura: u.data_hora_leitura || new Date().toISOString(),
+            id_celular: u.id_celular || Device.osBuildId || "CELULAR_DESCONHECIDO",
+            situacao: u.situacao !== undefined && !isNaN(parseInt(u.situacao)) ? parseInt(u.situacao) : 0,
+            is_condutor: u.is_condutor === 1 || u.is_condutor === true,
           }));
 
           setSyncStatusMsg(`Enviando veículos: ${i + 1} a ${Math.min(i + chunk.length, totalVeiculos)} de ${totalVeiculos}...`);
@@ -611,6 +611,10 @@ export default function App() {
           totalVeiculosEnviados += resVeiculos.count || chunk.length;
           registrosProcessados += chunk.length;
           setSyncProgress((registrosProcessados / totalGeral) * 100);
+
+          const nowChunk = new Date().toLocaleString("pt-BR");
+          setLastSyncLeiturasVeiculos(nowChunk);
+          await SecureStore.setItemAsync("last_sync_leituras_veiculos", nowChunk);
         }
 
         const now = new Date().toLocaleString("pt-BR");
@@ -635,6 +639,7 @@ export default function App() {
       if (err.message === "SESSION_EXPIRED") return;
       Alert.alert("Erro na Sincronização", err.message);
     } finally {
+      await refreshPendingLeituras();
       setIsSyncing(false);
       setLoading(false);
     }
@@ -918,13 +923,13 @@ export default function App() {
       for (let i = 0; i < total; i += chunkSize) {
         const chunk = unsyncedRefeicoes.slice(i, i + chunkSize);
         const payload = chunk.map((u) => ({
-          id: u.id,
+          id: u.id || (Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)),
           credencial: u.credencial,
           matricula: u.matricula,
           nome: u.nome,
-          data_hora_leitura: u.data_hora_leitura,
-          id_celular: u.id_celular,
-          situacao: u.situacao,
+          data_hora_leitura: u.data_hora_leitura || new Date().toISOString(),
+          id_celular: u.id_celular || Device.osBuildId || "CELULAR_DESCONHECIDO",
+          situacao: u.situacao !== undefined ? u.situacao : 0,
           id_refeitorio: u.id_refeitorio || selectedRefeitorio?.id || null,
         }));
 
@@ -941,6 +946,10 @@ export default function App() {
         totalEnviadas += res.count || chunk.length;
         registrosProcessados += chunk.length;
         setSyncProgress((registrosProcessados / total) * 100);
+
+        const nowChunk = new Date().toLocaleString("pt-BR");
+        setLastSyncRefeicoes(nowChunk);
+        await SecureStore.setItemAsync("last_sync_refeicoes", nowChunk);
       }
 
       const now = new Date().toLocaleString("pt-BR");
@@ -959,6 +968,7 @@ export default function App() {
       if (err.message === "SESSION_EXPIRED") return;
       Alert.alert("Erro no Envio de Refeições", err.message);
     } finally {
+      await refreshPendingLeituras();
       setIsSyncing(false);
       setLoading(false);
     }
